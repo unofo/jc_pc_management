@@ -20,7 +20,9 @@ function Add-Reg { $o = @(reg add @args /f 2>&1)[0]; if ($LASTEXITCODE) { Write-
 # The certificate is self-signed, so a good signature reads 'UnknownError' (untrusted root): the pinned thumbprint is what
 # counts; a changed file reads 'HashMismatch'. A person running this by hand always gets the file they run.
 # History: update.txt next to log.txt. The version before the last update: pc_cleanup.old.ps1.
-$version = 2026111802       # raise for every release: PCs only take a higher number (so no downgrade either)
+# Raise $version for every release: PCs only take a higher number (so no downgrade either). Keep that line bare:
+# the logon task at the end copies it to the NAS as this PC's status.
+$version = 2026111803
 $updateUrl = 'https://raw.githubusercontent.com/unofo/jc_pc_management/main/pc_cleanup.ps1'
 $signer = 'CDB8786DBAB645148EA2A8B82EFBE9CE854C06FA'
 $self = "$dir\pc_cleanup.ps1"
@@ -129,12 +131,29 @@ foreach ($p in Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVers
         if ($LASTEXITCODE) { continue }
     }
     $k = Get-Item "Registry::HKU\$hive\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders" -ErrorAction SilentlyContinue
+    $desk = "$prof\Desktop"
     if ($k) {
         foreach ($name in $folders) {
             $v = ([string]$k.GetValue($name, '', 'DoNotExpandEnvironmentNames')) -replace '%USERPROFILE%', $prof.Replace('$', '$$')
             if ($v.StartsWith("$prof\OneDrive", [StringComparison]::OrdinalIgnoreCase)) { $keepOneDrive = $true; Write-Warning "Still inside OneDrive: $v" }
+            if ($name -eq 'Desktop' -and $v) { $desk = $v }
         }
         $k.Close()
+    }
+    # SalesMap moved on the NAS (2026-11-18): \\<nas>\SalesMap -> \\<nas>\Tools\sales_map. Point this user's desktop icon and
+    # data folder setting (local.json, written with \\\\ or with //) at the new place. Nothing to change = nothing written.
+    $nasRx = '(jc-nas|192\.168\.0\.171)'
+    $lnk = "$desk\SalesMap.lnk"
+    if (Test-Path -LiteralPath $lnk) {
+        $s = (New-Object -ComObject WScript.Shell).CreateShortcut($lnk)
+        $a = $s.Arguments -replace "(?i)(\\\\$nasRx)\\SalesMap\\", '$1\Tools\sales_map\'
+        if ($a -ne $s.Arguments) { $s.Arguments = $a; $s.Save(); "SalesMap icon now points to the new NAS folder: $lnk" }
+    }
+    $cfg = "$prof\AppData\Roaming\SalesMap\local.json"
+    if (Test-Path -LiteralPath $cfg) {
+        $j = [IO.File]::ReadAllText($cfg)
+        $n = $j -replace "(?i)((?:\\\\\\\\|//)$nasRx)(\\\\|/)SalesMap(?=\3)", '$1$3Tools$3sales_map'
+        if ($n -ne $j) { [IO.File]::WriteAllText($cfg, $n); "SalesMap data folder now points to the new NAS folder: $cfg" }
     }
     # Classic Teams installed per user (the second "Microsoft Teams" entry on some PCs)
     $tu = "$prof\AppData\Local\Microsoft\Teams\Update.exe"
@@ -224,7 +243,19 @@ if ($PSCommandPath -ne $self) { Copy-Item $PSCommandPath $self -Force }
 Register-ScheduledTask -TaskName RemoveBloat -Force `
     -Action (New-ScheduledTaskAction -Execute powershell.exe -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$self`"") `
     -Trigger (New-ScheduledTaskTrigger -AtStartup) `
-    -Principal (New-ScheduledTaskPrincipal -UserId SYSTEM -RunLevel Highest) | Out-Null
+    -Settings ($onBattery = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries) `
+    -Principal (New-ScheduledTaskPrincipal -UserId SYSTEM -RunLevel Highest) | Out-Null   # default = AC power only: notebooks
+
+# --- Status for the admin: 2 minutes after any user logs on, write this PC's $version line to the NAS as <PC name>.txt
+# (file date = last logon). As the user, because only users have the NAS login (SYSTEM does not); office address first,
+# then the Tailscale name. conhost --headless = no window flashes up. No NAS = nothing happens, next logon tries again.
+$nas = 'Tools\pc_management\status\%COMPUTERNAME%.txt'
+$find = "findstr /b /l `$version $self"
+$logon = New-ScheduledTaskTrigger -AtLogOn; $logon.Delay = 'PT2M'
+Register-ScheduledTask -TaskName RemoveBloatStatus -Force `
+    -Action (New-ScheduledTaskAction -Execute conhost.exe -Argument "--headless cmd /c $find > \\192.168.0.171\$nas 2>nul || $find > \\jc-nas\$nas") `
+    -Trigger $logon -Settings $onBattery `
+    -Principal (New-ScheduledTaskPrincipal -GroupId S-1-5-32-545) | Out-Null   # S-1-5-32-545 = Users
 
 # --- Self-check: anything still installed is listed here and in log.txt
 # "Staged" for every entry = the files lie on the disk (factory image) but no user has the app; Windows keeps such copies and
@@ -242,8 +273,8 @@ Stop-Transcript | Out-Null
 # SIG # Begin signature block
 # MIIFZwYJKoZIhvcNAQcCoIIFWDCCBVQCAQExCzAJBgUrDgMCGgUAMGkGCisGAQQB
 # gjcCAQSgWzBZMDQGCisGAQQBgjcCAR4wJgIDAQAABBAfzDtgWUsITrck0sYpfvNR
-# AgEAAgEAAgEAAgEAAgEAMCEwCQYFKw4DAhoFAAQUswBbQ+so91s4uvcGKwITWhQo
-# VmqgggMEMIIDADCCAeigAwIBAgIQbJgRWdpsZZhGIWivjED1ojANBgkqhkiG9w0B
+# AgEAAgEAAgEAAgEAAgEAMCEwCQYFKw4DAhoFAAQUbbqzf0hvPTfWdEkkJY3PzZdS
+# EmOgggMEMIIDADCCAeigAwIBAgIQbJgRWdpsZZhGIWivjED1ojANBgkqhkiG9w0B
 # AQsFADAYMRYwFAYDVQQDDA1KQyBwY19jbGVhbnVwMB4XDTI2MTExODAyMTEzOVoX
 # DTQ2MTExODAyMjEzOVowGDEWMBQGA1UEAwwNSkMgcGNfY2xlYW51cDCCASIwDQYJ
 # KoZIhvcNAQEBBQADggEPADCCAQoCggEBANdF7OMIUMnW2D5RUDZQ4yq+XfJ+JYAx
@@ -262,11 +293,11 @@ Stop-Transcript | Out-Null
 # 09BEDZn0MYk+BzGCAc0wggHJAgEBMCwwGDEWMBQGA1UEAwwNSkMgcGNfY2xlYW51
 # cAIQbJgRWdpsZZhGIWivjED1ojAJBgUrDgMCGgUAoHgwGAYKKwYBBAGCNwIBDDEK
 # MAigAoAAoQKAADAZBgkqhkiG9w0BCQMxDAYKKwYBBAGCNwIBBDAcBgorBgEEAYI3
-# AgELMQ4wDAYKKwYBBAGCNwIBFTAjBgkqhkiG9w0BCQQxFgQUtCrYsMyw+bWrMHzB
-# 0NaDfZotFcIwDQYJKoZIhvcNAQEBBQAEggEAin2gSE2NXJwOuYDnwyqJQLRlPBpg
-# N6yyNp7NWyHitt68UsFB8/dGgn3S3JHWFWLH0rOni+3/7oUmlqHF8cawoq2aRz+M
-# WiFdPCsy1tRQpLY+pk1qm4YScYSEKv3DXmM3nd8tn/9BrdUTCXFACdTS6Y0S8Kfo
-# Xl+x5s+YmLp+M78+x/vmB6enc0eKOs5QZM9TAVfFBotMlsZdwS748We2Fm27lb/T
-# mLdgSeLqfgF/YsGGSFHHTs8xdbaKUfGLpPE7HsjyZIyA0+uX02a0K0idguHvepf3
-# OCkOH7hjRQU8pwZLBeNMZr5MikcskgpcPlTbfl1LTOSh3hwpgQhTNYB34A==
+# AgELMQ4wDAYKKwYBBAGCNwIBFTAjBgkqhkiG9w0BCQQxFgQUNUKUwmWK/522bkQJ
+# 8EpVcJsJOukwDQYJKoZIhvcNAQEBBQAEggEASacJUNSxpzV9bMP7+jG6TqlGvGDh
+# 7YUFjSSPO40kESDU6GCj0W5z0fP1sIH6cEcc4R5PboMvbMWtZjdJn3j7log+dR4W
+# qdBEJ0xFLmc8rDerbPy3s8qI38q9ijtdBvL+FcdNKw+ip2XwG0/gc2mdZgJcYIHY
+# 5me6C6GnuIx2MlmtE/ZwN1thOJgzh/iLaZYFurFnoxyCtnpkGFd1yhaAlzmjB8kx
+# JrtL0sv/L2Ykh1Bf9LMz43LW6/MGwpLaC/GKTYoCL8BaLWc07k1B2I7im4bNg6jl
+# TPPKW5PvIMium+LLR5RWJgHXHKntnxsDKzCuj+06p44cJpG0m9UntQJ27A==
 # SIG # End signature block
