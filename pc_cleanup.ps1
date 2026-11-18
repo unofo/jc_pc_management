@@ -22,7 +22,7 @@ function Add-Reg { $o = @(reg add @args /f 2>&1)[0]; if ($LASTEXITCODE) { Write-
 # History: update.txt next to log.txt. The version before the last update: pc_cleanup.old.ps1.
 # Raise $version for every release: PCs only take a higher number (so no downgrade either). Keep that line bare:
 # the logon task at the end copies it to the NAS as this PC's status.
-$version = 2026111803
+$version = 2026111804
 $updateUrl = 'https://raw.githubusercontent.com/unofo/jc_pc_management/main/pc_cleanup.ps1'
 $signer = 'CDB8786DBAB645148EA2A8B82EFBE9CE854C06FA'
 $self = "$dir\pc_cleanup.ps1"
@@ -256,6 +256,9 @@ Register-ScheduledTask -TaskName RemoveBloatStatus -Force `
     -Action (New-ScheduledTaskAction -Execute conhost.exe -Argument "--headless cmd /c $find > \\192.168.0.171\$nas 2>nul || $find > \\jc-nas\$nas") `
     -Trigger $logon -Settings $onBattery `
     -Principal (New-ScheduledTaskPrincipal -GroupId S-1-5-32-545) | Out-Null   # S-1-5-32-545 = Users
+# Someone is usually logged on before this boot run gets here; a task registered after the logon misses that logon
+# (seen 2026-11-18: never ran until started by hand). So run it once now - nobody logged on yet = the trigger does it.
+Start-ScheduledTask RemoveBloatStatus -ErrorAction SilentlyContinue
 
 # --- Self-check: anything still installed is listed here and in log.txt
 # "Staged" for every entry = the files lie on the disk (factory image) but no user has the app; Windows keeps such copies and
@@ -273,8 +276,8 @@ Stop-Transcript | Out-Null
 # SIG # Begin signature block
 # MIIFZwYJKoZIhvcNAQcCoIIFWDCCBVQCAQExCzAJBgUrDgMCGgUAMGkGCisGAQQB
 # gjcCAQSgWzBZMDQGCisGAQQBgjcCAR4wJgIDAQAABBAfzDtgWUsITrck0sYpfvNR
-# AgEAAgEAAgEAAgEAAgEAMCEwCQYFKw4DAhoFAAQUbbqzf0hvPTfWdEkkJY3PzZdS
-# EmOgggMEMIIDADCCAeigAwIBAgIQbJgRWdpsZZhGIWivjED1ojANBgkqhkiG9w0B
+# AgEAAgEAAgEAAgEAAgEAMCEwCQYFKw4DAhoFAAQU3f7taPGbCgWPnqWh1ZzZ0Mqr
+# qnegggMEMIIDADCCAeigAwIBAgIQbJgRWdpsZZhGIWivjED1ojANBgkqhkiG9w0B
 # AQsFADAYMRYwFAYDVQQDDA1KQyBwY19jbGVhbnVwMB4XDTI2MTExODAyMTEzOVoX
 # DTQ2MTExODAyMjEzOVowGDEWMBQGA1UEAwwNSkMgcGNfY2xlYW51cDCCASIwDQYJ
 # KoZIhvcNAQEBBQADggEPADCCAQoCggEBANdF7OMIUMnW2D5RUDZQ4yq+XfJ+JYAx
@@ -293,11 +296,11 @@ Stop-Transcript | Out-Null
 # 09BEDZn0MYk+BzGCAc0wggHJAgEBMCwwGDEWMBQGA1UEAwwNSkMgcGNfY2xlYW51
 # cAIQbJgRWdpsZZhGIWivjED1ojAJBgUrDgMCGgUAoHgwGAYKKwYBBAGCNwIBDDEK
 # MAigAoAAoQKAADAZBgkqhkiG9w0BCQMxDAYKKwYBBAGCNwIBBDAcBgorBgEEAYI3
-# AgELMQ4wDAYKKwYBBAGCNwIBFTAjBgkqhkiG9w0BCQQxFgQUNUKUwmWK/522bkQJ
-# 8EpVcJsJOukwDQYJKoZIhvcNAQEBBQAEggEASacJUNSxpzV9bMP7+jG6TqlGvGDh
-# 7YUFjSSPO40kESDU6GCj0W5z0fP1sIH6cEcc4R5PboMvbMWtZjdJn3j7log+dR4W
-# qdBEJ0xFLmc8rDerbPy3s8qI38q9ijtdBvL+FcdNKw+ip2XwG0/gc2mdZgJcYIHY
-# 5me6C6GnuIx2MlmtE/ZwN1thOJgzh/iLaZYFurFnoxyCtnpkGFd1yhaAlzmjB8kx
-# JrtL0sv/L2Ykh1Bf9LMz43LW6/MGwpLaC/GKTYoCL8BaLWc07k1B2I7im4bNg6jl
-# TPPKW5PvIMium+LLR5RWJgHXHKntnxsDKzCuj+06p44cJpG0m9UntQJ27A==
+# AgELMQ4wDAYKKwYBBAGCNwIBFTAjBgkqhkiG9w0BCQQxFgQUkciMqiRMeKkDvi1/
+# nqUM3gpFrp8wDQYJKoZIhvcNAQEBBQAEggEAWmbI3G33n4KWsSnEqMQPsVOszg2W
+# dRKrZ5zqw49RmhG4T/PK9ZbU1M2ZOn1Pz+VGiJBHoWl9XxfsDi2s81h+GZMo1FzK
+# xc8KmlsOPVPEcOpWT4b8i4DKScKaE2UHt2a9T+3T0OzWo7MXaLwSQgTt0XHltByD
+# VJMScIdfZgigLsMpMMp3x2PnFm1H+T78qNTHqWVDeXTYdF4uMNE+vTjQqsz0OO9v
+# sR2ITXN0C72y59pfPCx9xuMnrhBbDPbCw/YHiIZkXoBHtnHhdRuPMLsxDx3NVmXq
+# WMxwAj/PJuktvH07hQwPDG8HCTeY+cwCW6pOQbQKrCbWf8BQ9C0SXEuIfw==
 # SIG # End signature block
