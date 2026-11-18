@@ -20,7 +20,7 @@ function Add-Reg { $o = @(reg add @args /f 2>&1)[0]; if ($LASTEXITCODE) { Write-
 # The certificate is self-signed, so a good signature reads 'UnknownError' (untrusted root): the pinned thumbprint is what
 # counts; a changed file reads 'HashMismatch'. A person running this by hand always gets the file they run.
 # History: update.txt next to log.txt. The version before the last update: pc_cleanup.old.ps1.
-$version = 2026111801        # raise for every release: PCs only take a higher number (so no downgrade either)
+$version = 2026111802       # raise for every release: PCs only take a higher number (so no downgrade either)
 $updateUrl = 'https://raw.githubusercontent.com/unofo/jc_pc_management/main/pc_cleanup.ps1'
 $signer = 'CDB8786DBAB645148EA2A8B82EFBE9CE854C06FA'
 $self = "$dir\pc_cleanup.ps1"
@@ -242,8 +242,8 @@ Stop-Transcript | Out-Null
 # SIG # Begin signature block
 # MIIFZwYJKoZIhvcNAQcCoIIFWDCCBVQCAQExCzAJBgUrDgMCGgUAMGkGCisGAQQB
 # gjcCAQSgWzBZMDQGCisGAQQBgjcCAR4wJgIDAQAABBAfzDtgWUsITrck0sYpfvNR
-# AgEAAgEAAgEAAgEAAgEAMCEwCQYFKw4DAhoFAAQUNfNyb+0+V/+Z/eNQq94G21By
-# +SGgggMEMIIDADCCAeigAwIBAgIQbJgRWdpsZZhGIWivjED1ojANBgkqhkiG9w0B
+# AgEAAgEAAgEAAgEAAgEAMCEwCQYFKw4DAhoFAAQUswBbQ+so91s4uvcGKwITWhQo
+# VmqgggMEMIIDADCCAeigAwIBAgIQbJgRWdpsZZhGIWivjED1ojANBgkqhkiG9w0B
 # AQsFADAYMRYwFAYDVQQDDA1KQyBwY19jbGVhbnVwMB4XDTI2MTExODAyMTEzOVoX
 # DTQ2MTExODAyMjEzOVowGDEWMBQGA1UEAwwNSkMgcGNfY2xlYW51cDCCASIwDQYJ
 # KoZIhvcNAQEBBQADggEPADCCAQoCggEBANdF7OMIUMnW2D5RUDZQ4yq+XfJ+JYAx
@@ -262,11 +262,11 @@ Stop-Transcript | Out-Null
 # 09BEDZn0MYk+BzGCAc0wggHJAgEBMCwwGDEWMBQGA1UEAwwNSkMgcGNfY2xlYW51
 # cAIQbJgRWdpsZZhGIWivjED1ojAJBgUrDgMCGgUAoHgwGAYKKwYBBAGCNwIBDDEK
 # MAigAoAAoQKAADAZBgkqhkiG9w0BCQMxDAYKKwYBBAGCNwIBBDAcBgorBgEEAYI3
-# AgELMQ4wDAYKKwYBBAGCNwIBFTAjBgkqhkiG9w0BCQQxFgQUQrZn79xZ3PkeiCWM
-# i0wWXN0m+IwwDQYJKoZIhvcNAQEBBQAEggEAVbW7p4ZdqBf0yy9Y1/YtA+5VEewQ
-# jIrw6GrrWAHa4J/RQxabEdlMN+uXmzqOifkfL9+FohwJ57v/IDzhj9+C7X5Od1hW
-# qN3S0pGnkPXUyDlVLeay0B0GG8WYnqagXMWmVegvnkV0UD0FQ9Tg6cSZjh6RnWM6
-# zj10kw3n179uMN04ui88IeMOC3zoqh0zp1t6Zp+ZnmBaNz8g7nXGtxrH7CWloPHO
-# GYCgw+oM4st8Eg7K3T4MwI3a8EfNKgRo0y2WDYJfer+fn8A/nBpIMlntbIv/njml
-# kl8utNNBcWCIK1n4V4MWXAqFkrsAwYQeciN5TboMEwrRmfk8OCulyZBqaQ==
+# AgELMQ4wDAYKKwYBBAGCNwIBFTAjBgkqhkiG9w0BCQQxFgQUtCrYsMyw+bWrMHzB
+# 0NaDfZotFcIwDQYJKoZIhvcNAQEBBQAEggEAin2gSE2NXJwOuYDnwyqJQLRlPBpg
+# N6yyNp7NWyHitt68UsFB8/dGgn3S3JHWFWLH0rOni+3/7oUmlqHF8cawoq2aRz+M
+# WiFdPCsy1tRQpLY+pk1qm4YScYSEKv3DXmM3nd8tn/9BrdUTCXFACdTS6Y0S8Kfo
+# Xl+x5s+YmLp+M78+x/vmB6enc0eKOs5QZM9TAVfFBotMlsZdwS748We2Fm27lb/T
+# mLdgSeLqfgF/YsGGSFHHTs8xdbaKUfGLpPE7HsjyZIyA0+uX02a0K0idguHvepf3
+# OCkOH7hjRQU8pwZLBeNMZr5MikcskgpcPlTbfl1LTOSh3hwpgQhTNYB34A==
 # SIG # End signature block
