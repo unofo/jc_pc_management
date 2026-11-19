@@ -12,6 +12,18 @@
 $ErrorActionPreference = 'Continue'
 $dir = "$env:ProgramData\RemoveBloat"
 New-Item -ItemType Directory -Force $dir | Out-Null
+# log.txt holds only the latest run. Before it is overwritten, its warnings and errors - and the fact that it stopped
+# before the end - are added to problems.txt, which is kept for good and goes to the NAS with the audit (2026-11-19).
+if (Test-Path "$dir\log.txt") {
+    $last = Get-Content "$dir\log.txt" -ErrorAction SilentlyContinue
+    $when = (Get-Item "$dir\log.txt").LastWriteTime.ToString('s')
+    # Korean Windows writes a warning as "<gyeong-go>:" (character codes; ASCII only here) and errors with the English
+    # FullyQualifiedErrorId line (seen 2026-11-19: a Korean warning slipped through when only 'WARNING' was looked for)
+    $warnKo = [string][char]0xACBD + [char]0xACE0 + ':'
+    $bad = @($last | Where-Object { ($_ -match 'WARNING|Exception|FullyQualifiedErrorId|error|failed' -or $_.StartsWith($warnKo)) -and $_ -notmatch 'Not deprovisioned|On the disk only' })
+    if (-not ($last -match '^Finished: cleanup\.')) { $bad += 'DID NOT FINISH (stopped before the end, or still running when the PC went off)' }
+    $bad | Select-Object -Unique | Select-Object -First 30 | ForEach-Object { Add-Content "$dir\problems.txt" "$when $_" }
+}
 Start-Transcript "$dir\log.txt" -Force | Out-Null
 # reg add that names the key when it fails (a bare reg error only says "Access is denied", not where)
 function Add-Reg { $o = @(reg add @args /f 2>&1)[0]; if ($LASTEXITCODE) { Write-Warning "reg add failed: $($args[0]) /v $($args[2]) : $o" } }
@@ -22,7 +34,7 @@ function Add-Reg { $o = @(reg add @args /f 2>&1)[0]; if ($LASTEXITCODE) { Write-
 # History: update.txt next to log.txt. The version before the last update: pc_cleanup.old.ps1.
 # Raise $version for every release: PCs only take a higher number (so no downgrade either). Keep that line bare:
 # the logon task at the end copies it to the NAS as this PC's status.
-$version = 2026111810
+$version = 2026111812
 $updateUrl = 'https://raw.githubusercontent.com/unofo/jc_pc_management/main/pc_cleanup.ps1'
 $signer = 'CDB8786DBAB645148EA2A8B82EFBE9CE854C06FA'
 $self = "$dir\pc_cleanup.ps1"
@@ -44,6 +56,7 @@ if ($isSystem -and $PSCommandPath -eq $self) {
         else {
             Add-Content "$dir\update.txt" "$(Get-Date -Format s) $version -> $v"
             Copy-Item $self "$dir\pc_cleanup.old.ps1" -Force
+            "Finished: cleanup. Updated to $v - the new version runs now."      # not a failed run for problems.txt
             Stop-Transcript | Out-Null
             Move-Item $new $self -Force
             & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $self
@@ -129,8 +142,9 @@ Get-WindowsOptionalFeature -Online -FeatureName WindowsMediaPlayer -ErrorAction 
 #   the boot task only writes that they are still there. A bank site that needs AhnLab Safe Transaction installs it again.
 $programs = @('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*', 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*' |
     ForEach-Object { Get-ItemProperty $_ -ErrorAction SilentlyContinue } | Where-Object { $_.DisplayName -and $_.UninstallString })
-function Start-Uninstall($p, $quiet) {        # runs $p's uninstaller, at most 5 minutes (a window nobody answers must not hold the boot task)
-    $cmd = if ($p.UninstallString -match 'msiexec') { "msiexec /x $($p.PSChildName) $(if ($quiet) { '/qn' }) /norestart" }
+function Start-Uninstall($p, $quiet, $switches) {   # runs $p's uninstaller, at most 5 minutes (a window nobody answers must not hold the boot task)
+    $cmd = if ($switches) { "$($p.UninstallString) $switches" }
+           elseif ($p.UninstallString -match 'msiexec') { "msiexec /x $($p.PSChildName) $(if ($quiet) { '/qn' }) /norestart" }
            elseif ($quiet -and $p.QuietUninstallString) { $p.QuietUninstallString }
            else { "$($p.UninstallString)$(if ($quiet) { ' /S' })" }
     $proc = Start-Process cmd -ArgumentList "/c `"$cmd`"" -PassThru -WindowStyle Hidden
@@ -150,6 +164,18 @@ $av = @(Get-CimInstance -Namespace root/SecurityCenter2 -ClassName AntiVirusProd
 # ALTools' own advertising: 'AL Manager' and 'ALTools update' pop up offers to install ALYac and other programs (asked for
 # 2026-11-19). Their names are Korean, written here as character codes. ALZip, ALSee and ALCapture themselves stay.
 $alAds = ([string][char]0xC54C + [char]0xB9E4 + [char]0xB2C8 + [char]0xC800 + '*'), ([string][char]0xC54C + [char]0xD234 + [char]0xC988 + ' *')
+# They use Inno Setup uninstallers, which run without any window with these switches (done by hand on a PC, 2026-11-19:
+# exit code 0) - so they go at every run, boot included. Leftovers: the 'ALNotify' autostart and a scheduled task that
+# starts an ESTsoft program.
+$alQuiet = @($programs | Where-Object { $d = $_.DisplayName; ($alAds | Where-Object { $d -like $_ }) -and $_.UninstallString -match 'unins\d+\.exe' })
+foreach ($p in $alQuiet) { 'Removing ALTools manager / update...'; Start-Uninstall $p $true '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART' }
+if ($alQuiet) {
+    cmd /c 'reg delete "HKLM\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Run" /v ALNotify /f >nul 2>&1'
+    cmd /c 'reg delete "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" /v ALNotify /f >nul 2>&1'
+    Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object { "$($_.Actions.Execute)" -like '*ESTsoft*ALUpdate*' -or "$($_.Actions.Execute)" -like '*ESTsoft*ALToolsManager*' } |
+        Unregister-ScheduledTask -Confirm:$false
+}
+$quiet += $alQuiet
 $known = 'AhnLab*', 'McAfee*', 'Norton*', 'Avast*', 'AVG *', 'Avira*', 'Kaspersky*', 'ESET *', 'Bitdefender*', 'Malwarebytes*',
          'Trend Micro*', 'ViRobot*', 'CCleaner*', 'IObit*', 'Advanced SystemCare*', 'Driver Booster*'
 $byHand = @($programs | Where-Object {
@@ -206,6 +232,8 @@ foreach ($p in Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVers
     # Classic Teams installed per user (the second "Microsoft Teams" entry on some PCs)
     $tu = "$prof\AppData\Local\Microsoft\Teams\Update.exe"
     if (Test-Path -LiteralPath $tu) { Start-Process $tu -ArgumentList '--uninstall -s' -Wait }
+    # OneDrive is removed: its installer's autostart left in the user's own Run key (seen in the audit of a PC, 2026-11-19)
+    if (-not $keepOneDrive) { cmd /c "reg delete `"HKU\$hive\Software\Microsoft\Windows\CurrentVersion\Run`" /v OneDriveSetup /f >nul 2>&1" }
     # Game Bar is removed: turn game capture off so Win+G / a controller does not pop up "get an app for ms-gamingoverlay"
     Add-Reg "HKU\$hive\System\GameConfigStore" /v GameDVR_Enabled /t REG_DWORD /d 0
     Add-Reg "HKU\$hive\Software\Microsoft\Windows\CurrentVersion\GameDVR" /v AppCaptureEnabled /t REG_DWORD /d 0
@@ -231,6 +259,26 @@ foreach ($p in Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVers
     # Start menu: no tips / promoted apps. (File extensions, Explorer start page, Task View button: pc_setup.ps1 sets them
     # once - staff may change them afterwards, so they are not re-applied here.)
     Add-Reg "HKU\$hive\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v Start_IrisRecommendations /t REG_DWORD /d 0
+    # Storage Sense on (decided 2026-11-19): once a month, temp files apps do not use and recycle-bin items older than 30
+    # days. Downloads are never touched (32 = 0, 512 = 0): old files there are a person's decision.
+    $ss = "HKU\$hive\Software\Microsoft\Windows\CurrentVersion\StorageSense\Parameters\StoragePolicy"
+    foreach ($v in @{ n = '01'; d = 1 }, @{ n = '2048'; d = 30 }, @{ n = '04'; d = 1 }, @{ n = '08'; d = 1 }, @{ n = '256'; d = 30 }, @{ n = '32'; d = 0 }, @{ n = '512'; d = 0 }) {
+        Add-Reg $ss /v $v.n /t REG_DWORD /d $v.d
+    }
+    # Lock after 15 minutes away (decided 2026-11-19): a blank screen saver that asks for the sign-in when it ends. A screen
+    # saver the person chose stays (only its timeout and the lock are set). Sleep stays off on mains power (below).
+    # Office: macros in files from the internet (mail attachments, downloads) are blocked - the usual way ransomware gets in.
+    # Microsoft 365 does this by default; set so it stays. Files on the NAS or made here are not affected.
+    foreach ($app in 'excel', 'word', 'powerpoint') {
+        Add-Reg "HKU\$hive\Software\Policies\Microsoft\Office\16.0\$app\security" /v blockcontentexecutionfrominternet /t REG_DWORD /d 1
+    }
+    $dk = "HKU\$hive\Control Panel\Desktop"
+    Add-Reg $dk /v ScreenSaveActive /t REG_SZ /d 1
+    Add-Reg $dk /v ScreenSaveTimeOut /t REG_SZ /d 900
+    Add-Reg $dk /v ScreenSaverIsSecure /t REG_SZ /d 1
+    if (-not (Get-ItemProperty "Registry::$dk" -Name SCRNSAVE.EXE -ErrorAction SilentlyContinue).'SCRNSAVE.EXE') {
+        Add-Reg $dk /v SCRNSAVE.EXE /t REG_SZ /d "$env:SystemRoot\System32\scrnsave.scr"
+    }
     if ($hive -ne $sid) { [gc]::Collect(); [gc]::WaitForPendingFinalizers(); reg unload "HKU\$hive" 2>$null | Out-Null }
 }
 
@@ -293,6 +341,152 @@ Add-Reg 'HKLM\SOFTWARE\Policies\Microsoft\Windows\SettingSync' /v DisableSetting
 # 2026-11-13). Widgets are gone anyway: their app (MicrosoftWindows.Client.WebExperience) is removed and deprovisioned above.
 Set-Policy 'Windows\CloudContent'   'DisableWindowsConsumerFeatures' # no auto-installed suggested apps (ignored on Home/Pro)
 
+# Every change below is also appended to changes.txt (kept for good, never overwritten) and goes to the NAS with the audit:
+# the audit runs after the changes, so without this nobody could tell later which PC had UAC off etc. before (2026-11-19).
+$changes = "$dir\changes.txt"
+function Save-Change([string]$m) { Add-Content $changes "$(Get-Date -Format s) $m"; $m }
+function Set-SshFirewall {   # port 22 only from Tailscale addresses AND only through the Tailscale adapter: some mobile
+    # hotspots / providers hand out 100.64.x.x addresses too, so the address alone is not enough (2026-11-19)
+    if (-not (Get-NetFirewallRule -Name sshd-tailscale -ErrorAction SilentlyContinue)) {
+        New-NetFirewallRule -Name sshd-tailscale -DisplayName 'sshd (Tailscale only)' -Direction Inbound -Protocol TCP -LocalPort 22 -RemoteAddress 100.64.0.0/10 -Action Allow | Out-Null
+    }
+    if ((Get-NetFirewallRule -Name sshd-tailscale | Get-NetFirewallInterfaceFilter).InterfaceAlias -ne 'Tailscale') {
+        if (Get-NetAdapter -Name Tailscale -ErrorAction SilentlyContinue) { Set-NetFirewallRule -Name sshd-tailscale -InterfaceAlias Tailscale; Save-Change 'SSH firewall: through the Tailscale connection only' }
+        else { Write-Warning 'SSH firewall: no Tailscale adapter on this PC yet - Tailscale addresses only for now.' }
+    }
+}
+function Set-DwordNoted($key, $name, $value, $what) {   # sets HKLM value $name = $value; notes it when it was different before
+    $now = (Get-ItemProperty "Registry::$key" -Name $name -ErrorAction SilentlyContinue).$name
+    if ($now -ne $value) { Add-Reg $key /v $name /t REG_DWORD /d $value; Save-Change "$what (was $(if ($null -eq $now) { 'not set' } else { $now }))" }
+}
+
+# --- Network discovery off (decided 2026-11-19): this PC no longer shows up in other PCs' "Network" folder. The NAS and
+# printers are reached by address, which does not need it. FDResPub (Function Discovery Resource Publication) is the
+# service that announces this PC.
+# shortcut: only stops the announcing; the firewall group "Network Discovery" stays as it is (WSD printers may use it), so
+# Settings may still show discovery as on. Disable that group too if a PC still shows up.
+$fd = Get-Service FDResPub -ErrorAction SilentlyContinue
+if ($fd -and $fd.StartType -ne 'Disabled') {
+    Stop-Service FDResPub -Force -ErrorAction SilentlyContinue; Set-Service FDResPub -StartupType Disabled
+    Save-Change 'Network discovery: this PC no longer announces itself on the network.'
+}
+
+# --- Speed (decided 2026-11-19). Services that only slow the boot / sit in memory:
+#   gupdate, gupdatem = the OLD Google updater (Chrome updates itself with the new GoogleUpdater); timed out at every boot on
+#   one PC. HP Print Scan Doctor = a diagnosis tool's service; printer drivers are separate and stay.
+foreach ($s in @(Get-Service gupdate, gupdatem -ErrorAction SilentlyContinue) + @(Get-Service | Where-Object DisplayName -like 'HP Print Scan Doctor*')) {
+    if ($s.StartType -ne 'Disabled') { Stop-Service $s.Name -Force -ErrorAction SilentlyContinue; Set-Service $s.Name -StartupType Disabled; Save-Change "Service off: $($s.DisplayName)" }
+}
+# Delivery Optimization: updates come from Microsoft only, not shared with / from other PCs (its cache grew to 12-17 GB).
+Add-Reg 'HKLM\SOFTWARE\Policies\Microsoft\Windows\DeliveryOptimization' /v DODownloadMode /t REG_DWORD /d 0
+# Desktops: no hibernation file (as big as part of the memory; a desktop does not hibernate). Laptops keep it.
+if (-not (Get-CimInstance Win32_Battery -ErrorAction SilentlyContinue) -and (Test-Path "$env:SystemDrive\hiberfil.sys")) { powercfg /hibernate off; Save-Change 'Hibernation off (desktop).' }
+# Never sleep on mains power, also when locked (RustDesk must always reach the PC). The screen may still switch off.
+powercfg /change standby-timeout-ac 0; powercfg /change hibernate-timeout-ac 0
+
+# --- Windows leftovers, once a month: crash dumps of drivers, Windows' temp files older than a week, error reports, the
+# Delivery Optimization cache. Nothing of a person's. Stamp = leftovers.txt (date of the last run).
+$stamp = "$dir\leftovers.txt"
+if (-not (Test-Path $stamp) -or (Get-Item $stamp).LastWriteTime -lt (Get-Date).AddDays(-30)) {
+    $n = 0; $bytes = 0
+    $old = (Get-Date).AddDays(-7)
+    $files = @(Get-ChildItem "$env:SystemRoot\LiveKernelReports" -Recurse -File -Force -ErrorAction SilentlyContinue) +
+             @(Get-ChildItem "$env:SystemRoot\Temp" -Recurse -File -Force -ErrorAction SilentlyContinue | Where-Object LastWriteTime -lt $old) +
+             @(Get-ChildItem "$env:ProgramData\Microsoft\Windows\WER\ReportArchive", "$env:ProgramData\Microsoft\Windows\WER\ReportQueue" -Recurse -File -Force -ErrorAction SilentlyContinue)
+    foreach ($f in $files) { $l = $f.Length; Remove-Item -LiteralPath $f.FullName -Force -ErrorAction SilentlyContinue; if (-not (Test-Path -LiteralPath $f.FullName)) { $n++; $bytes += $l } }
+    Delete-DeliveryOptimizationCache -Force -ErrorAction SilentlyContinue | Out-Null
+    Set-Content $stamp (Get-Date -Format s)
+    "Leftovers: $n file(s), $([math]::Round($bytes / 1GB, 2)) GB deleted; Delivery Optimization cache emptied."
+}
+
+# --- Security (decided 2026-11-19): the same on every PC. Each line changes only what differs, and says so.
+$sys = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'
+# UAC on: with it off, Windows' sign-in window for a new Microsoft account never opens (two PCs, 2026-11-19). Takes a restart.
+if ((Get-ItemProperty $sys).EnableLUA -ne 1) { Set-ItemProperty $sys EnableLUA 1 -Type DWord; Write-Warning (Save-Change 'UAC was off: now on, after the next restart.') }
+if ((Get-ItemProperty $sys).ConsentPromptBehaviorAdmin -eq 0) { Set-ItemProperty $sys ConsentPromptBehaviorAdmin 5 -Type DWord; Save-Change 'UAC prompt for administrators was never: back to the default.' }
+# Windows Update not paused / not switched off (one PC had no updates for two years).
+$ux = 'HKLM:\SOFTWARE\Microsoft\WindowsUpdate\UX\Settings'
+$pause = @((Get-Item $ux -ErrorAction SilentlyContinue).Property | Where-Object { $_ -like 'Pause*' })
+if ($pause) { Remove-ItemProperty $ux -Name $pause; Save-Change 'Windows Update was paused: pause removed.' }
+$wuau = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU'
+if ((Get-ItemProperty $wuau -ErrorAction SilentlyContinue).NoAutoUpdate -eq 1) { Remove-ItemProperty $wuau -Name NoAutoUpdate; Save-Change 'Automatic updates were switched off: back on.' }
+# Firewall on for every network type.
+$off = @(Get-NetFirewallProfile | Where-Object { -not $_.Enabled })
+if ($off) { Set-NetFirewallProfile -All -Enabled True; Save-Change "Firewall was off ($($off.Name -join ', ')): now on." }
+# Windows Security (the only antivirus now): real-time protection on; block potentially unwanted apps (bundled adware,
+# "PC optimizers", toolbars that come along with free programs). Nothing happens if another antivirus is in charge.
+$mp = Get-MpPreference -ErrorAction SilentlyContinue
+if ($mp) {
+    if ($mp.DisableRealtimeMonitoring) { Set-MpPreference -DisableRealtimeMonitoring $false -ErrorAction SilentlyContinue; Save-Change 'Real-time protection was off: now on.' }
+    if ($mp.PUAProtection -ne 1) { Set-MpPreference -PUAProtection Enabled -ErrorAction SilentlyContinue; Save-Change 'Blocking of potentially unwanted apps was off: now on.' }
+}
+# SMB1 = the old file-sharing protocol (WannaCry); the NAS and Windows 10/11 use SMB2/3. Takes a restart.
+if ((Get-WindowsOptionalFeature -Online -FeatureName SMB1Protocol -ErrorAction SilentlyContinue).State -eq 'Enabled') {
+    Disable-WindowsOptionalFeature -Online -FeatureName SMB1Protocol -NoRestart -ErrorAction SilentlyContinue | Out-Null; Write-Warning (Save-Change 'SMB1 was on: removed, after the next restart.')
+}
+# No Remote Desktop / Remote Assistance into this PC (RustDesk is the way in), no AutoRun from USB sticks and CDs.
+Set-DwordNoted 'HKLM\SYSTEM\CurrentControlSet\Control\Terminal Server' fDenyTSConnections 1 'Remote Desktop off'
+Set-DwordNoted 'HKLM\SYSTEM\CurrentControlSet\Control\Remote Assistance' fAllowToGetHelp 0 'Remote Assistance off'
+Set-DwordNoted 'HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer' NoDriveTypeAutoRun 255 'AutoRun off for all drives'
+# SSH on every PC (decided 2026-11-19), so the admin can look at a PC without anyone there: installed if missing (some
+# minutes, once; no network = next boot), starts with Windows, only the admin PC's key (a PUBLIC key - safe to publish;
+# the private one never leaves the admin's PC, and has a passphrase), no password sign-in, and the firewall lets in only
+# what comes through the Tailscale connection (the Tailscale access rules allow port 22 from the admin's PC only).
+$sshKey = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIICJGRz24EU02+DBya0R6Okt6S44ArGIIRsb3KKV2p9e'
+if (-not (Get-Service sshd -ErrorAction SilentlyContinue)) {
+    try { Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0 -ErrorAction Stop | Out-Null; Save-Change 'SSH server installed' }
+    catch { Write-Warning "SSH server not installed (tried again at the next boot): $($_.Exception.Message)" }
+}
+if (Get-Service sshd -ErrorAction SilentlyContinue) {
+    # first on: a PC where an older guide closed SSH has it "Disabled", and a disabled service cannot be (re)started below
+    # (2026-11-19: the key-only setting was then rolled back as if it had broken sshd)
+    $st = (Get-Service sshd).StartType
+    if ($st -ne 'Automatic') { Set-Service sshd -StartupType Automatic; Save-Change "SSH: starts with Windows now (was $st)" }
+    if ((Get-Service sshd).Status -ne 'Running') { Start-Service sshd -ErrorAction SilentlyContinue }   # also writes the default sshd_config at the first start
+    $cf = "$env:ProgramData\ssh\sshd_config"
+    $k = "$env:ProgramData\ssh\administrators_authorized_keys"
+    if ((Get-Content $k -ErrorAction SilentlyContinue) -join "`n" -ne $sshKey) {
+        Set-Content $k $sshKey -Encoding ASCII
+        icacls $k /inheritance:r /grant '*S-1-5-32-544:F' /grant '*S-1-5-18:F' | Out-Null      # sshd ignores the file otherwise
+        Save-Change 'SSH: admin key written'
+    }
+    $t = @(Get-Content $cf -ErrorAction SilentlyContinue)
+    if ($t -and -not (($t -match '^\s*PasswordAuthentication\s+no\s*$') -and ($t -match '^\s*ChallengeResponseAuthentication\s+no\s*$'))) {     # first value counts: put it first
+        Copy-Item $cf "$cf.before_keyonly" -Force
+        Set-Content $cf (@('PasswordAuthentication no', 'ChallengeResponseAuthentication no') + @($t | Where-Object { $_ -notmatch '^\s*(PasswordAuthentication|ChallengeResponseAuthentication|KbdInteractiveAuthentication)\s' })) -Encoding ASCII
+        Restart-Service sshd -ErrorAction SilentlyContinue
+        if ((Get-Service sshd).Status -ne 'Running') { Copy-Item "$cf.before_keyonly" $cf -Force; Start-Service sshd -ErrorAction SilentlyContinue; Write-Warning 'SSH: key-only setting made sshd fail - old setting back.' }
+        else { Save-Change 'SSH: password sign-in off (key only)' }
+    }
+    Disable-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' -ErrorAction SilentlyContinue      # Windows' own rule = from anywhere
+    Set-SshFirewall
+}
+# Common hardening (decided 2026-11-19, "A-F"):
+# LLMNR off: another device on the network can answer a mistyped name and catch the sign-in (the NAS is reached by address
+# or by Tailscale's own names, which do not use LLMNR).
+Set-DwordNoted 'HKLM\SOFTWARE\Policies\Microsoft\Windows NT\DNSClient' EnableMulticast 0 'LLMNR off'
+# WDigest: no password kept in memory in plain text (off by default since Windows 8.1; an old program can switch it on).
+Set-DwordNoted 'HKLM\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest' UseLogonCredential 0 'WDigest plain-text passwords off'
+# PowerShell 2.0: an old engine without today's protections, used to get round them. Gone from recent Windows anyway.
+foreach ($f in 'MicrosoftWindowsPowerShellV2Root', 'MicrosoftWindowsPowerShellV2') {
+    if ((Get-WindowsOptionalFeature -Online -FeatureName $f -ErrorAction SilentlyContinue).State -eq 'Enabled') {
+        Disable-WindowsOptionalFeature -Online -FeatureName $f -NoRestart -ErrorAction SilentlyContinue | Out-Null; Save-Change "$f was on: removed" }
+}
+# Network protection: Windows Security blocks known malicious sites for every browser and program, not only Edge.
+if ($mp -and $mp.EnableNetworkProtection -ne 1) { Set-MpPreference -EnableNetworkProtection Enabled -ErrorAction SilentlyContinue; Save-Change "Network protection on (was $($mp.EnableNetworkProtection))" }
+# Guest account off, Remote Registry service off.
+Get-LocalUser -ErrorAction SilentlyContinue | Where-Object { $_.SID.Value -like '*-501' -and $_.Enabled } | ForEach-Object { Disable-LocalUser $_; Save-Change "Guest account was on: off" }
+$rr = Get-Service RemoteRegistry -ErrorAction SilentlyContinue
+if ($rr -and $rr.StartType -ne 'Disabled') { Stop-Service RemoteRegistry -Force -ErrorAction SilentlyContinue; Set-Service RemoteRegistry -StartupType Disabled; Save-Change "Remote Registry off (was $($rr.StartType))" }
+# Local accounts: locked for 15 minutes after 10 wrong passwords (guessing). Read through secedit: its keys are English
+# whatever the Windows language (net accounts prints Korean). A PIN has its own, separate protection.
+$cfg = "$dir\secpol.inf"
+secedit /export /cfg $cfg /areas SECURITYPOLICY /quiet | Out-Null
+$m = Select-String -Path $cfg -Pattern '^LockoutBadCount\s*=\s*(\d+)' -ErrorAction SilentlyContinue | Select-Object -First 1
+$bad = if ($m) { [int]$m.Matches[0].Groups[1].Value } else { -1 }
+Remove-Item $cfg -ErrorAction SilentlyContinue
+if ($bad -ne 10) { net accounts /lockoutthreshold:10 /lockoutduration:15 /lockoutwindow:15 | Out-Null; Save-Change "Account lockout after 10 wrong passwords, 15 minutes (threshold was $bad)" }
+
 # --- Persist: copy self and re-run at every startup as SYSTEM
 if ($PSCommandPath -ne $self) { Copy-Item $PSCommandPath $self -Force }
 Register-ScheduledTask -TaskName RemoveBloat -Force `
@@ -301,19 +495,94 @@ Register-ScheduledTask -TaskName RemoveBloat -Force `
     -Settings ($onBattery = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries) `
     -Principal (New-ScheduledTaskPrincipal -UserId SYSTEM -RunLevel Highest) | Out-Null   # default = AC power only: notebooks
 
+# --- Audit (read only, 2026-11-19): how this PC's security settings stand, one "name=value" per line in audit.txt; the
+# logon task below copies it to the NAS as <PC name>_audit.txt so all PCs can be compared. Runs after the changes above:
+# the "changed=" lines at its end say what was different before.
+function Get-RegValue($key, $name) { (Get-ItemProperty "Registry::$key" -Name $name -ErrorAction SilentlyContinue).$name }
+$au = [ordered]@{}
+$au.date    = Get-Date -Format s
+$au.version = $version
+$os = Get-CimInstance Win32_OperatingSystem
+$au.windows = "$($os.Caption) $($os.BuildNumber)"
+$au.activated = [bool](Get-CimInstance SoftwareLicensingProduct -Filter "PartialProductKey IS NOT NULL AND Name LIKE 'Windows%'" | Where-Object LicenseStatus -eq 1)
+$sys = 'HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'
+$au.uac       = Get-RegValue $sys EnableLUA                     # 1 = on
+$au.uacPrompt = Get-RegValue $sys ConsentPromptBehaviorAdmin    # 5 = default, 0 = never asks
+$au.firewall  = (Get-NetFirewallProfile | ForEach-Object { "$($_.Name):$($_.Enabled)" }) -join ' '
+$au.netProfile = (Get-NetConnectionProfile | ForEach-Object { "$($_.InterfaceAlias):$($_.NetworkCategory)" }) -join ' | '
+$mp = Get-MpComputerStatus -ErrorAction SilentlyContinue
+$au.defender  = if ($mp) { "realtime:$($mp.RealTimeProtectionEnabled) tamper:$($mp.IsTamperProtected) signaturesDays:$($mp.AntivirusSignatureAge)" } else { 'no status' }
+$au.antivirus = (Get-CimInstance -Namespace root\SecurityCenter2 AntiVirusProduct -ErrorAction SilentlyContinue | ForEach-Object displayName) -join ', '
+$au.smartAppControl = Get-RegValue 'HKLM\SYSTEM\CurrentControlSet\Control\CI\Policy' VerifiedAndReputablePolicyState   # 1 = on, 2 = evaluation, 0 = off
+$au.smartScreen = Get-RegValue 'HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer' SmartScreenEnabled
+$au.memoryIntegrity = Get-RegValue 'HKLM\SYSTEM\CurrentControlSet\Control\DeviceGuard\Scenarios\HypervisorEnforcedCodeIntegrity' Enabled
+$au.lsaProtection = Get-RegValue 'HKLM\SYSTEM\CurrentControlSet\Control\Lsa' RunAsPPL
+$au.secureBoot = try { Confirm-SecureBootUEFI -ErrorAction Stop } catch { 'n/a' }
+$tpm = Get-CimInstance -Namespace root\cimv2\Security\MicrosoftTpm Win32_Tpm -ErrorAction SilentlyContinue
+$au.tpm = if ($tpm) { "ready:$($tpm.IsEnabled_InitialValue) spec:$($tpm.SpecVersion.Split(',')[0])" } else { 'none' }
+$au.bitlocker = (Get-CimInstance -Namespace root\cimv2\Security\MicrosoftVolumeEncryption Win32_EncryptableVolume -Filter "DriveLetter='C:'" -ErrorAction SilentlyContinue).ProtectionStatus   # 1 = on
+$au.smb1 = (Get-WindowsOptionalFeature -Online -FeatureName SMB1Protocol -ErrorAction SilentlyContinue).State
+$au.shares = (Get-SmbShare -ErrorAction SilentlyContinue | Where-Object { $_.Name -notmatch '\$$' } | ForEach-Object { "$($_.Name)=$($_.Path)" }) -join ' | '
+$au.remoteDesktop = if ((Get-RegValue 'HKLM\SYSTEM\CurrentControlSet\Control\Terminal Server' fDenyTSConnections) -eq 0) { 'on' } else { 'off' }
+$au.remoteAssistance = Get-RegValue 'HKLM\SYSTEM\CurrentControlSet\Control\Remote Assistance' fAllowToGetHelp
+$au.remoteRegistry = (Get-Service RemoteRegistry -ErrorAction SilentlyContinue).StartType
+$au.sshd = $(if ($s = Get-Service sshd -ErrorAction SilentlyContinue) { "$($s.Status)/$($s.StartType)" } else { 'not installed' })
+$au.autoLogon = "$(Get-RegValue 'HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon' AutoAdminLogon) user:$(Get-RegValue 'HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon' DefaultUserName)"
+$au.localUsers = (Get-LocalUser | Where-Object Enabled | ForEach-Object { "$($_.Name)($($_.PrincipalSource),pwRequired:$($_.PasswordRequired))" }) -join ' '
+$au.admins = (Get-LocalGroupMember -SID S-1-5-32-544 -ErrorAction SilentlyContinue | ForEach-Object Name) -join ', '
+$au.guest = (Get-LocalUser | Where-Object { $_.SID.Value -like '*-501' }).Enabled
+$au.lastUpdate = (Get-HotFix | Sort-Object InstalledOn -Descending -ErrorAction SilentlyContinue | Select-Object -First 1 | ForEach-Object { "$($_.HotFixID) $($_.InstalledOn)" })
+$au.updatesPaused = Get-RegValue 'HKLM\SOFTWARE\Microsoft\WindowsUpdate\UX\Settings' PauseUpdatesExpiryTime
+$au.networkDiscovery = (Get-Service FDResPub -ErrorAction SilentlyContinue).StartType
+$au.autoplayOff = Get-RegValue 'HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer' NoDriveTypeAutoRun
+$au.sleepOnAC = (powercfg /query SCHEME_CURRENT SUB_SLEEP STANDBYIDLE | Select-String 'AC' | Select-Object -Last 1) -replace '.*:\s*', ''
+# Hardware and health (2026-11-19): which PC needs a part (an HDD instead of an SSD is the biggest slowdown) or attention.
+$au.cpu = (Get-CimInstance Win32_Processor | Select-Object -First 1).Name.Trim()
+$au.ramGB = [math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB)
+$au.disks = (Get-PhysicalDisk -ErrorAction SilentlyContinue | ForEach-Object { "$($_.FriendlyName) $($_.MediaType) $([math]::Round($_.Size / 1GB))GB $($_.HealthStatus)" }) -join ' | '
+$c = Get-PSDrive C; $au.freeC = "$([math]::Round($c.Free / 1GB))GB ($([math]::Round(100 * $c.Free / ($c.Free + $c.Used)))%)"
+$bios = Get-CimInstance Win32_BIOS; $au.bios = "$($bios.SMBIOSBIOSVersion) $($bios.ReleaseDate.ToString('yyyy-MM-dd'))"
+$au.lastBootSeconds = (Get-WinEvent -FilterHashtable @{ LogName = 'Microsoft-Windows-Diagnostics-Performance/Operational'; Id = 100 } -MaxEvents 1 -ErrorAction SilentlyContinue |
+    ForEach-Object { [math]::Round(([xml]$_.ToXml()).Event.EventData.Data.Where({ $_.Name -eq 'BootTime' }).'#text' / 1000) })
+$au.startup = (Get-CimInstance Win32_StartupCommand -ErrorAction SilentlyContinue | ForEach-Object Name | Sort-Object -Unique) -join ', '
+# Old programs with known holes or no support any more (Java 6-8 updates aside, Flash, Silverlight, QuickTime, old Reader).
+$au.oldPrograms = ($programs | Where-Object { $_.DisplayName -match '^(Java [6-8]|Java\(TM\)|Adobe Flash|Microsoft Silverlight|QuickTime|Adobe Reader (X|XI|9))' } |
+    ForEach-Object { "$($_.DisplayName) $($_.DisplayVersion)" } | Sort-Object -Unique) -join ', '
+foreach ($p in Get-CimInstance Win32_UserProfile | Where-Object { -not $_.Special -and $_.Loaded -and $_.LocalPath -like 'C:\Users\*' }) {   # only users whose settings are loaded now
+    $d = "HKU\$($p.SID)\Control Panel\Desktop"
+    $au["lock_$(Split-Path $p.LocalPath -Leaf)"] = "screensaver:$(Get-RegValue $d ScreenSaveActive) timeout:$(Get-RegValue $d ScreenSaveTimeOut) secure:$(Get-RegValue $d ScreenSaverIsSecure)"
+}
+$au.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" } | Set-Content "$dir\audit.txt" -Encoding UTF8
+# what this script changed on this PC, ever (the values above are AFTER those changes)
+if (Test-Path $changes) { Get-Content $changes | ForEach-Object { "changed=$_" } | Add-Content "$dir\audit.txt" -Encoding UTF8 }
+# what went wrong in earlier runs (warnings, errors, runs that did not finish) - the latest 40
+if (Test-Path "$dir\problems.txt") { Get-Content "$dir\problems.txt" -Tail 40 | ForEach-Object { "problem=$_" } | Add-Content "$dir\audit.txt" -Encoding UTF8 }
+
 # --- Status for the admin: 2 minutes after any user logs on, write this PC's $version line to the NAS as <PC name>.txt
 # (file date = last logon). As the user, because only users have the NAS login (SYSTEM does not); office address first,
 # then the Tailscale name. conhost --headless = no window flashes up. No NAS = nothing happens, next logon tries again.
 $nas = "Tools\pc_management\status\$($env:COMPUTERNAME.ToLower()).txt"     # lowercase file name (2026-11-18); the name as it is at this boot
+$nasAudit = $nas -replace '\.txt$', '_audit.txt'
+$nasLog = $nas -replace '\.txt$', '_log.txt'       # the latest run in full (problems.txt in the audit keeps the history)
 $find = "findstr /b /l `$version $self"
 $logon = New-ScheduledTaskTrigger -AtLogOn; $logon.Delay = 'PT2M'
 Register-ScheduledTask -TaskName RemoveBloatStatus -Force `
-    -Action (New-ScheduledTaskAction -Execute conhost.exe -Argument "--headless cmd /c $find > \\192.168.0.171\$nas 2>nul || $find > \\jc-nas\$nas") `
+    -Action (New-ScheduledTaskAction -Execute conhost.exe -Argument "--headless cmd /c ($find > \\192.168.0.171\$nas 2>nul && copy /y $dir\audit.txt \\192.168.0.171\$nasAudit >nul) || ($find > \\jc-nas\$nas && copy /y $dir\audit.txt \\jc-nas\$nasAudit >nul) & (copy /y $dir\log.txt \\192.168.0.171\$nasLog >nul 2>&1 || copy /y $dir\log.txt \\jc-nas\$nasLog >nul 2>&1)") `
     -Trigger $logon -Settings $onBattery `
     -Principal (New-ScheduledTaskPrincipal -GroupId S-1-5-32-545) | Out-Null   # S-1-5-32-545 = Users
 # Someone is usually logged on before this boot run gets here; a task registered after the logon misses that logon
 # (seen 2026-11-18: never ran until started by hand). So run it once now - nobody logged on yet = the trigger does it.
 Start-ScheduledTask RemoveBloatStatus -ErrorAction SilentlyContinue
+
+# --- Network drives: at logon Windows shows mapped drives with a red X until someone opens them (the network, or Tailscale,
+# is not up yet when it tries). 30 s after logon, touch each of this user's mapped drives (HKCU\Network) - that is what a
+# click does - and retry every 30 s for 5 minutes for the ones not reachable yet. Never deletes or changes a mapping.
+$touch = 'foreach ($i in 1..10) { $k = @(Get-ChildItem HKCU:\Network -ErrorAction SilentlyContinue | Where-Object { -not (Test-Path ($_.PSChildName + '':\'')) }); if (-not $k) { break }; Start-Sleep 30 }'
+$logon = New-ScheduledTaskTrigger -AtLogOn; $logon.Delay = 'PT30S'
+Register-ScheduledTask -TaskName RemoveBloatDrives -Force `
+    -Action (New-ScheduledTaskAction -Execute conhost.exe -Argument ("--headless powershell.exe -NoProfile -EncodedCommand " + [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($touch)))) `
+    -Trigger $logon -Settings $onBattery `
+    -Principal (New-ScheduledTaskPrincipal -GroupId S-1-5-32-545) | Out-Null
 
 # --- Self-check: anything still installed is listed here and in log.txt
 # "Staged" for every entry = the files lie on the disk (factory image) but no user has the app; Windows keeps such copies and
@@ -331,8 +600,8 @@ Stop-Transcript | Out-Null
 # SIG # Begin signature block
 # MIIFZwYJKoZIhvcNAQcCoIIFWDCCBVQCAQExCzAJBgUrDgMCGgUAMGkGCisGAQQB
 # gjcCAQSgWzBZMDQGCisGAQQBgjcCAR4wJgIDAQAABBAfzDtgWUsITrck0sYpfvNR
-# AgEAAgEAAgEAAgEAAgEAMCEwCQYFKw4DAhoFAAQUk9rZ5h7/g6FkfJsGuu/QD6ug
-# VQWgggMEMIIDADCCAeigAwIBAgIQbJgRWdpsZZhGIWivjED1ojANBgkqhkiG9w0B
+# AgEAAgEAAgEAAgEAAgEAMCEwCQYFKw4DAhoFAAQUSMdGk4kFefP+W7nfL18rE+Qr
+# nz6gggMEMIIDADCCAeigAwIBAgIQbJgRWdpsZZhGIWivjED1ojANBgkqhkiG9w0B
 # AQsFADAYMRYwFAYDVQQDDA1KQyBwY19jbGVhbnVwMB4XDTI2MTExODAyMTEzOVoX
 # DTQ2MTExODAyMjEzOVowGDEWMBQGA1UEAwwNSkMgcGNfY2xlYW51cDCCASIwDQYJ
 # KoZIhvcNAQEBBQADggEPADCCAQoCggEBANdF7OMIUMnW2D5RUDZQ4yq+XfJ+JYAx
@@ -351,11 +620,11 @@ Stop-Transcript | Out-Null
 # 09BEDZn0MYk+BzGCAc0wggHJAgEBMCwwGDEWMBQGA1UEAwwNSkMgcGNfY2xlYW51
 # cAIQbJgRWdpsZZhGIWivjED1ojAJBgUrDgMCGgUAoHgwGAYKKwYBBAGCNwIBDDEK
 # MAigAoAAoQKAADAZBgkqhkiG9w0BCQMxDAYKKwYBBAGCNwIBBDAcBgorBgEEAYI3
-# AgELMQ4wDAYKKwYBBAGCNwIBFTAjBgkqhkiG9w0BCQQxFgQUQ4O10UbHb2IWkeRr
-# qY8wFtdtob0wDQYJKoZIhvcNAQEBBQAEggEAM8GccFrZVikX+Nc0GNs8IPQ8O+e4
-# ZONPHrg+aSQmMKLTl2JJhWgEVLsGzYFl1+uV6HGyOFUbvVaOt7TEgPlYHpXkt1kz
-# 5EQheqB0RLM++TIykFKgpwlXilSOxtp5dhmSBzYMOV6SiHBF5Zx3uzTTVDeokezR
-# l1yYIhqDJw2vimUUTHvx5yM1e/8K7wXNM3ObTc/kle6Rwk+dLUmoCf6WuC3ytlND
-# ngk31G0g7TczajJwwqPHQYATBEl2S5RrlEYZgDcM+cJcCkFezaSFIS8160V0xCY1
-# CdYbv1UURuwxMtZc2gNe0kPurN+4a4ss6o3/cZGwGsyg27S8gNMhgkLBPw==
+# AgELMQ4wDAYKKwYBBAGCNwIBFTAjBgkqhkiG9w0BCQQxFgQULw+SmOQBNoYaTMG/
+# wvgdFK9+QPEwDQYJKoZIhvcNAQEBBQAEggEAnQdmceigK3KfZZQjsc7o39MqauYa
+# imLNQLzUMuehuFZupFU7v9VNGpQutDBLSOgcqD07AYna0im4jb6eSlnCUHuVA2ry
+# UZx4JjxZgkvbAt7d2v0EazEafVjoAiLVeyv29cmRl94+24P3+BzJeHo2Fu1XjQxI
+# bwZCgSbMze3MkOkoRtPnhDOJL6/sqzO6oEHeuYWwhSa3r4nLddMEPDwDNxk5ovOz
+# lrx4/O90MnzQIQl8o3v/w8GBVfmIcVemCIgQ8fyFNOdUxQLHeL5WMyd9ZIV8VxX3
+# sDBz7eQEsVOdtMHCuhl37xhqF2r23Gr23yMYPUwFbY8qtyTINHfhZucrqg==
 # SIG # End signature block
