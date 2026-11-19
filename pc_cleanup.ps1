@@ -47,13 +47,11 @@ function Remove-DeadRun([string]$key, [bool]$user) {
     }
     $k.Close()
 }
-# Only the needed programs start at sign-in (decided 2026-11-19): Tailscale, RustDesk, Windows Security, Google's updater
-# (Chrome updates). Everything else in Settings > Apps > Startup is switched OFF there - KakaoTalk, Gemini, the bank /
-# certificate modules (a bank site starts them itself when it needs them) ... Not deleted: switched off the way that
-# Settings page does it (StartupApproved, first byte odd = off), and ONCE per entry (2026-11-19, same evening): an entry
-# seen before is left as it is, so a person can switch it on again for good; a program that adds itself later is switched
-# off once at the next boot - so they do not pile up. Seen entries: ...\RemoveBloat\StartupSeen. Services are not touched.
-# Each one switched off goes to changes.txt.
+# Startup programs: only the AI apps below are switched off (at every boot). Switching off everything but a short list
+# (decided 2026-11-19 evening, dropped the same night) also caught programs the office needs - the scan receivers
+# (FBKRSSU, Sindoh MyScan) and others nobody here knows of. Which programs start on each PC is in the audit (startup=).
+# Off = the way Settings > Apps > Startup does it (StartupApproved, first byte odd = off), not deleted. The "once per entry"
+# mode (marks in ...\RemoveBloat\StartupSeen) stays in the function, unused. Each one switched off goes to changes.txt.
 $keepStartup = 'Tailscale|RustDesk|SecurityHealth|GoogleUpdater'
 # The AI apps (decided 2026-11-19): Claude, Gemini, ChatGPT, Perplexity and their kin (Perplexity's Comet, OpenAI's other
 # apps ...) never start at sign-in - switched off at EVERY boot, also when someone switched them on. Matched on the entry's
@@ -118,7 +116,7 @@ function Test-FirstTime([string]$root, [string]$name) {
 # History: update.txt next to log.txt. The version before the last update: pc_cleanup.old.ps1.
 # Raise $version for every release: PCs only take a higher number (so no downgrade either). Keep that line bare:
 # the logon task at the end copies it to the NAS as this PC's status.
-$version = 2026111814
+$version = 2026111815
 $updateUrl = 'https://raw.githubusercontent.com/unofo/jc_pc_management/main/pc_cleanup.ps1'
 $signer = 'CDB8786DBAB645148EA2A8B82EFBE9CE854C06FA'
 $self = "$dir\pc_cleanup.ps1"
@@ -379,8 +377,6 @@ foreach ($p in Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVers
     if (-not $keepOneDrive) { cmd /c "reg delete `"HKU\$hive\Software\Microsoft\Windows\CurrentVersion\Run`" /v OneDriveSetup /f >nul 2>&1" }
     Remove-DeadRun "HKU\$hive\Software\Microsoft\Windows\CurrentVersion\Run" $true
     $sa = "HKU\$hive\Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved"
-    Disable-Startups "HKU\$hive\Software\Microsoft\Windows\CurrentVersion\Run" "$sa\Run" $null
-    Disable-Startups $null "$sa\StartupFolder" "$prof\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup"
     # the AI apps: at every boot (Run entries, the Startup folder, and the Store apps' startup tasks in UsrClass.dat)
     Disable-Startups "HKU\$hive\Software\Microsoft\Windows\CurrentVersion\Run" "$sa\Run" $null $aiStartup
     Disable-Startups $null "$sa\StartupFolder" "$prof\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup" $aiStartup
@@ -473,9 +469,6 @@ if ($keepOneDrive) {
 Remove-DeadRun 'HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run' $false
 Remove-DeadRun 'HKLM\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Run' $false
 $sa = 'HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved'
-Disable-Startups 'HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run' "$sa\Run" $null
-Disable-Startups 'HKLM\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Run' "$sa\Run32" $null
-Disable-Startups $null "$sa\StartupFolder" "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\Startup"
 Disable-Startups 'HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run' "$sa\Run" $null $aiStartup
 Disable-Startups 'HKLM\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Run' "$sa\Run32" $null $aiStartup
 Disable-Startups $null "$sa\StartupFolder" "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\Startup" $aiStartup
@@ -840,8 +833,8 @@ Stop-Transcript | Out-Null
 # SIG # Begin signature block
 # MIIFZwYJKoZIhvcNAQcCoIIFWDCCBVQCAQExCzAJBgUrDgMCGgUAMGkGCisGAQQB
 # gjcCAQSgWzBZMDQGCisGAQQBgjcCAR4wJgIDAQAABBAfzDtgWUsITrck0sYpfvNR
-# AgEAAgEAAgEAAgEAAgEAMCEwCQYFKw4DAhoFAAQUvJd261gN9GPlrKrE4JyDRxMy
-# 4c+gggMEMIIDADCCAeigAwIBAgIQbJgRWdpsZZhGIWivjED1ojANBgkqhkiG9w0B
+# AgEAAgEAAgEAAgEAAgEAMCEwCQYFKw4DAhoFAAQUZ4WjjvhyHctIuo+bwyWAqHCP
+# 54SgggMEMIIDADCCAeigAwIBAgIQbJgRWdpsZZhGIWivjED1ojANBgkqhkiG9w0B
 # AQsFADAYMRYwFAYDVQQDDA1KQyBwY19jbGVhbnVwMB4XDTI2MTExODAyMTEzOVoX
 # DTQ2MTExODAyMjEzOVowGDEWMBQGA1UEAwwNSkMgcGNfY2xlYW51cDCCASIwDQYJ
 # KoZIhvcNAQEBBQADggEPADCCAQoCggEBANdF7OMIUMnW2D5RUDZQ4yq+XfJ+JYAx
@@ -860,11 +853,11 @@ Stop-Transcript | Out-Null
 # 09BEDZn0MYk+BzGCAc0wggHJAgEBMCwwGDEWMBQGA1UEAwwNSkMgcGNfY2xlYW51
 # cAIQbJgRWdpsZZhGIWivjED1ojAJBgUrDgMCGgUAoHgwGAYKKwYBBAGCNwIBDDEK
 # MAigAoAAoQKAADAZBgkqhkiG9w0BCQMxDAYKKwYBBAGCNwIBBDAcBgorBgEEAYI3
-# AgELMQ4wDAYKKwYBBAGCNwIBFTAjBgkqhkiG9w0BCQQxFgQULZIxA/L4HMwvbQ2c
-# Wctke3SyyuowDQYJKoZIhvcNAQEBBQAEggEAbh6JUtndegkCUrJTP2UhWW6I6vbb
-# kOh2DYc8WLEGwbj4FsAE3LOMzb5B9x4wrsNw2ZCsxT4wcRPLlG1Gy3HfMINVSqDu
-# FN5yY8RXn90/D9oXppIvh49jAfTGbH8HOb0JQrIxxoD3BZRX+5HDKN5CtO6w8zUz
-# 1NYxxiUCVLpze5dllzSZTteJicsDDSUcZqY0cRGBDbkkpPwmxNAOsgBrgAMCQbf5
-# UCKVexNyr6EnlbS4oEIiEkas+T7h+QlfCKBI9UZemogftYzHrwIPWmjP8ndR/+eq
-# 4ik6PNKQTRyaXVHhKaYcynolDUWPIInLc4Uh67Q9oj28/8ciAhhV7Qtaxg==
+# AgELMQ4wDAYKKwYBBAGCNwIBFTAjBgkqhkiG9w0BCQQxFgQUjVtxNsYhx7YzTHXr
+# zdfUDqGoY9IwDQYJKoZIhvcNAQEBBQAEggEAy/RMKsDkHdU5oI6eDUzj5bE5IAua
+# wYniS3If/AVw/Co69qfYqdgG9Y7goixD3hGZoJ2cEjc21+B4nGA1ymf/z3zVp3WX
+# pX3a6VToUWa7o4sf5cXnIoB1+hkIlgR1dAMW0vIk3fI90hIek1+CIWxgXtLpSDFj
+# +0NciH5lOKwk1XmzPx0VRKOSc8GelMYuNLMHPNZ3cfVaRJv7zMxGOFMvUHr15TDM
+# 118gkUWBuYZ6XDvjQDGiGUfrfz8uod9Uy01HHHhN95MrhIJQzGKDe+6DCCtyrZD/
+# +Zwj+i4Lo+0VAxcqK/8ZMMnQwNjWp2CygRMYVEwRzkqAYsn2lXDFLXLrHw==
 # SIG # End signature block
