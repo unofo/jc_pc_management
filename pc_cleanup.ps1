@@ -116,7 +116,7 @@ function Test-FirstTime([string]$root, [string]$name) {
 # History: update.txt next to log.txt. The version before the last update: pc_cleanup.old.ps1.
 # Raise $version for every release: PCs only take a higher number (so no downgrade either). Keep that line bare:
 # the logon task at the end copies it to the NAS as this PC's status.
-$version = 2026111815
+$version = 2026111816
 $updateUrl = 'https://raw.githubusercontent.com/unofo/jc_pc_management/main/pc_cleanup.ps1'
 $signer = 'CDB8786DBAB645148EA2A8B82EFBE9CE854C06FA'
 $self = "$dir\pc_cleanup.ps1"
@@ -422,6 +422,22 @@ foreach ($p in Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVers
     # cell to cell, which makes Excel feel much faster. ONCE per user: the person may switch it back (delete the value).
     # (Excel's "optimize for compatibility" with several displays was set here for a while: dropped the same evening.)
     if (Test-FirstTime "HKU\$hive" 'NoOfficeAnimations') { Add-Reg "HKU\$hive\Software\Microsoft\Office\16.0\Common\Graphics" /v DisableAnimations /t REG_DWORD /d 1 }
+    # Terminal (decided 2026-11-19): command windows open in Windows Terminal, and Terminal opens with Windows PowerShell
+    # 5.1 - some PCs had Command Prompt there, where a pasted PowerShell command fails. 5.1, not PowerShell 7: it is on
+    # every PC, and the commands handed out for these PCs are written and tried for it (7 was set for an hour, then
+    # dropped). The "default terminal app" ONCE per user (DelegationConsole / DelegationTerminal = Windows Terminal);
+    # Terminal's own default profile at every boot, only when it is Command Prompt ({0caa0dad-...}) -> Windows PowerShell
+    # ({61c54bbd-...}). Any other choice is left alone.
+    if (Test-FirstTime "HKU\$hive" 'TerminalDefault') {
+        Add-Reg "HKU\$hive\Console\%%Startup" /v DelegationConsole /t REG_SZ /d '{2EACA947-7F5F-4CFA-BA87-8F7FBEEFBE69}'
+        Add-Reg "HKU\$hive\Console\%%Startup" /v DelegationTerminal /t REG_SZ /d '{E12CFF52-A866-4C77-9A90-F570A7AA2C6B}'
+    }
+    $wt = "$prof\AppData\Local\Packages\Microsoft.WindowsTerminal_8wekyb3d8bbwe\LocalState\settings.json"
+    if (Test-Path -LiteralPath $wt) {
+        $j = [IO.File]::ReadAllText($wt)
+        $n = $j -replace '("defaultProfile"\s*:\s*")\{0caa0dad-35be-5f56-a8ff-afceeeaa6101\}(")', '${1}{61c54bbd-c2c6-5271-96e7-009a87ff44bf}${2}'
+        if ($n -ne $j) { [IO.File]::WriteAllText($wt, $n, (New-Object Text.UTF8Encoding $false)); "Terminal opens with Windows PowerShell now (was Command Prompt): $wt" }
+    }
     # Taskbar icons on the LEFT, not centred (decided 2026-11-19, every PC). ONCE per user: the person may centre them again.
     if (Test-FirstTime "HKU\$hive" 'TaskbarLeft') { Add-Reg "HKU\$hive\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v TaskbarAl /t REG_DWORD /d 0 }
     # no advertising ID, no "tailored experiences" from diagnostic data (decided 2026-11-19)
@@ -627,6 +643,8 @@ if ((Get-ItemProperty $wuau -ErrorAction SilentlyContinue).NoAutoUpdate -eq 1) {
 # value (UX\Settings IsContinuousInnovationOptedIn) is set back to 1 by Windows whatever is written there (a test PC, 2026-11-19).
 Set-DwordNoted 'HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate' AllowOptionalContent 0 'Windows Update: optional (preview) updates off'
 Set-DwordNoted 'HKLM\SOFTWARE\Microsoft\WindowsUpdate\UX\Settings' AllowMUUpdateService 1 'Windows Update: updates for other Microsoft products'
+# Microsoft Store apps update by themselves (2026-11-19): Windows Terminal, the AI apps, Notepad ... (4 = on).
+Set-DwordNoted 'HKLM\SOFTWARE\Policies\Microsoft\WindowsStore' AutoDownload 4 'Store: apps update automatically'
 # Office on its released channel (Current), not Beta / Preview (decided 2026-11-19, at every boot: a PC had been put on
 # the Beta channel; joining the Office Insider program again would move it back). Only where Office (Click-to-Run) is there.
 $c2r = 'HKLM:\SOFTWARE\Microsoft\Office\ClickToRun\Configuration'
@@ -833,8 +851,8 @@ Stop-Transcript | Out-Null
 # SIG # Begin signature block
 # MIIFZwYJKoZIhvcNAQcCoIIFWDCCBVQCAQExCzAJBgUrDgMCGgUAMGkGCisGAQQB
 # gjcCAQSgWzBZMDQGCisGAQQBgjcCAR4wJgIDAQAABBAfzDtgWUsITrck0sYpfvNR
-# AgEAAgEAAgEAAgEAAgEAMCEwCQYFKw4DAhoFAAQUZ4WjjvhyHctIuo+bwyWAqHCP
-# 54SgggMEMIIDADCCAeigAwIBAgIQbJgRWdpsZZhGIWivjED1ojANBgkqhkiG9w0B
+# AgEAAgEAAgEAAgEAAgEAMCEwCQYFKw4DAhoFAAQUirD1MK975ZWXxd8tZn/sZlfK
+# H9mgggMEMIIDADCCAeigAwIBAgIQbJgRWdpsZZhGIWivjED1ojANBgkqhkiG9w0B
 # AQsFADAYMRYwFAYDVQQDDA1KQyBwY19jbGVhbnVwMB4XDTI2MTExODAyMTEzOVoX
 # DTQ2MTExODAyMjEzOVowGDEWMBQGA1UEAwwNSkMgcGNfY2xlYW51cDCCASIwDQYJ
 # KoZIhvcNAQEBBQADggEPADCCAQoCggEBANdF7OMIUMnW2D5RUDZQ4yq+XfJ+JYAx
@@ -853,11 +871,11 @@ Stop-Transcript | Out-Null
 # 09BEDZn0MYk+BzGCAc0wggHJAgEBMCwwGDEWMBQGA1UEAwwNSkMgcGNfY2xlYW51
 # cAIQbJgRWdpsZZhGIWivjED1ojAJBgUrDgMCGgUAoHgwGAYKKwYBBAGCNwIBDDEK
 # MAigAoAAoQKAADAZBgkqhkiG9w0BCQMxDAYKKwYBBAGCNwIBBDAcBgorBgEEAYI3
-# AgELMQ4wDAYKKwYBBAGCNwIBFTAjBgkqhkiG9w0BCQQxFgQUjVtxNsYhx7YzTHXr
-# zdfUDqGoY9IwDQYJKoZIhvcNAQEBBQAEggEAy/RMKsDkHdU5oI6eDUzj5bE5IAua
-# wYniS3If/AVw/Co69qfYqdgG9Y7goixD3hGZoJ2cEjc21+B4nGA1ymf/z3zVp3WX
-# pX3a6VToUWa7o4sf5cXnIoB1+hkIlgR1dAMW0vIk3fI90hIek1+CIWxgXtLpSDFj
-# +0NciH5lOKwk1XmzPx0VRKOSc8GelMYuNLMHPNZ3cfVaRJv7zMxGOFMvUHr15TDM
-# 118gkUWBuYZ6XDvjQDGiGUfrfz8uod9Uy01HHHhN95MrhIJQzGKDe+6DCCtyrZD/
-# +Zwj+i4Lo+0VAxcqK/8ZMMnQwNjWp2CygRMYVEwRzkqAYsn2lXDFLXLrHw==
+# AgELMQ4wDAYKKwYBBAGCNwIBFTAjBgkqhkiG9w0BCQQxFgQUDiuZ4Vi3TrP5UFDL
+# ebUVxfnNTSowDQYJKoZIhvcNAQEBBQAEggEAZeUID0xxWUERTtJifrmYaKhnvRN5
+# VtUOdmbo/1G4sFatOvI6tmexknqcGETc9CKDJC4ZR4bas8v57/7kExLFTg60LHua
+# xgfdZdbC/OTDk4Ft6wCl8EfVgjKbTR6frYsrazWfLlobuH0sgyqt3F1I58+dN3Fr
+# BgfG1VyfD8FYyzK7EUPuKU3rTMBKBATe8P4XJAJ/QsesQlfWTyRmNX2r1Cv3Rgdg
+# 1+Gk89CAOwE8JILbD8gOo/uXcisTXDD9Ahya2cjLzVOultuKQL55uWZf0ZIayLul
+# nVBWHI5S0d5MmwytCYNvcWIt791eD74SvQPqw5vxz/v2QjW3UDEbqXIhTA==
 # SIG # End signature block
