@@ -22,7 +22,7 @@ function Add-Reg { $o = @(reg add @args /f 2>&1)[0]; if ($LASTEXITCODE) { Write-
 # History: update.txt next to log.txt. The version before the last update: pc_cleanup.old.ps1.
 # Raise $version for every release: PCs only take a higher number (so no downgrade either). Keep that line bare:
 # the logon task at the end copies it to the NAS as this PC's status.
-$version = 2026111804
+$version = 2026111810
 $updateUrl = 'https://raw.githubusercontent.com/unofo/jc_pc_management/main/pc_cleanup.ps1'
 $signer = 'CDB8786DBAB645148EA2A8B82EFBE9CE854C06FA'
 $self = "$dir\pc_cleanup.ps1"
@@ -81,7 +81,10 @@ $apps = 'MSTeams', 'MicrosoftTeams',
         'C27EB4BA.DropboxOEM',                      # "Dropbox promotion"
         'PricelinePartnerNetwork.Booking.comAPACBigsavingso',  # Booking.com (the name really ends like this)
         '4DF9E0F8.Netflix',
-        'Microsoft.MSPaint'                         # Paint 3D (NOT Paint: that is Microsoft.Paint, which stays)
+        'Microsoft.MSPaint',                        # Paint 3D (NOT Paint: that is Microsoft.Paint, which stays)
+        # added 2026-11-18. Names as Microsoft publishes them, not yet seen on one of our PCs.
+        'MicrosoftCorporationII.MicrosoftFamily',   # Microsoft Family
+        'Microsoft.MinecraftUWP', 'Microsoft.4297127D64EC6', 'Microsoft.MinecraftEducationEdition'   # Minecraft, its launcher, Education
 # Kept on purpose: Photos, Sticky Notes, Phone Link, Media Player (ZuneMusic) + WebMediaExtensions (the only video player left),
 # Camera, Alarms & Clock, Copilot (Store app and the Edge-based desktop program) and
 # Microsoft 365 Copilot (Microsoft.MicrosoftOfficeHub, the old Office hub) - kept since 2026-11-17.
@@ -117,6 +120,51 @@ Get-WindowsOptionalFeature -Online -FeatureName WindowsMediaPlayer -ErrorAction 
     ForEach-Object { Get-ItemProperty $_ -ErrorAction SilentlyContinue } |
     Where-Object DisplayName -eq 'Teams Machine-Wide Installer' |
     ForEach-Object { Start-Process msiexec -ArgumentList "/x $($_.PSChildName) /qn /norestart" -Wait }
+
+# --- Programs not wanted on any PC (decided 2026-11-18), removed with their own uninstaller. Found in Windows' list of
+# installed programs: by name, ALYac by its folder (its name in that list is Korean).
+#   quiet = Melon Player, McAfee Security Scan Plus: uninstalled without a window, at every run.
+#   by hand = AhnLab (V3, Safe Transaction) and ALYac: they have no quiet uninstall. Their uninstall window is opened only
+#   when a person runs this (pc_setup.bat, or this file from an administrator PowerShell) and the person clicks through it;
+#   the boot task only writes that they are still there. A bank site that needs AhnLab Safe Transaction installs it again.
+$programs = @('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*', 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*' |
+    ForEach-Object { Get-ItemProperty $_ -ErrorAction SilentlyContinue } | Where-Object { $_.DisplayName -and $_.UninstallString })
+function Start-Uninstall($p, $quiet) {        # runs $p's uninstaller, at most 5 minutes (a window nobody answers must not hold the boot task)
+    $cmd = if ($p.UninstallString -match 'msiexec') { "msiexec /x $($p.PSChildName) $(if ($quiet) { '/qn' }) /norestart" }
+           elseif ($quiet -and $p.QuietUninstallString) { $p.QuietUninstallString }
+           else { "$($p.UninstallString)$(if ($quiet) { ' /S' })" }
+    $proc = Start-Process cmd -ArgumentList "/c `"$cmd`"" -PassThru -WindowStyle Hidden
+    if (-not $proc.WaitForExit(300000)) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue; Write-Warning "Uninstall of $($p.DisplayName) did not end in 5 minutes." }
+}
+$quiet = @($programs | Where-Object { $_.DisplayName -like 'Melon Player*' -or $_.DisplayName -like 'McAfee Security Scan*' })
+foreach ($p in $quiet) { "Removing $($p.DisplayName)..."; Start-Uninstall $p $true }
+# Third-party security and "PC health" programs in general (decided 2026-11-18): Windows Security does that job.
+#   - every antivirus that Windows' Security Center knows, except Microsoft's own (this finds ALYac, V3 ... by the name
+#     they registered, whatever language it is in)
+#   - the well-known suites and tune-up tools by name
+# NOT meant: the small modules that bank / tax / certificate web sites install (TouchEn, AnySign, Delfino, MagicLine,
+# IPinside, CrossEX, nProtect Online Security, WIZVERA ...): without them internet banking stops, and they are not listed here.
+# AhnLab Safe Transaction is such a module too, but it is removed with the other AhnLab products (asked for 2026-11-18).
+$av = @(Get-CimInstance -Namespace root/SecurityCenter2 -ClassName AntiVirusProduct -ErrorAction SilentlyContinue |
+    ForEach-Object displayName | Where-Object { $_ -and $_ -notmatch 'Windows Defender|Microsoft Defender' })
+# ALTools' own advertising: 'AL Manager' and 'ALTools update' pop up offers to install ALYac and other programs (asked for
+# 2026-11-19). Their names are Korean, written here as character codes. ALZip, ALSee and ALCapture themselves stay.
+$alAds = ([string][char]0xC54C + [char]0xB9E4 + [char]0xB2C8 + [char]0xC800 + '*'), ([string][char]0xC54C + [char]0xD234 + [char]0xC988 + ' *')
+$known = 'AhnLab*', 'McAfee*', 'Norton*', 'Avast*', 'AVG *', 'Avira*', 'Kaspersky*', 'ESET *', 'Bitdefender*', 'Malwarebytes*',
+         'Trend Micro*', 'ViRobot*', 'CCleaner*', 'IObit*', 'Advanced SystemCare*', 'Driver Booster*'
+$byHand = @($programs | Where-Object {
+    $d = $_.DisplayName
+    $_.PSChildName -notin $quiet.PSChildName -and (
+        ($known + $alAds | Where-Object { $d -like $_ }) -or ($av | Where-Object { $d -like "*$_*" }) -or
+        "$($_.UninstallString) $($_.InstallLocation)" -like '*\ALYac\*')
+})
+foreach ($p in $byHand) {
+    # ASCII in the log: a Korean name is written by what it is
+    $n = if ($p.DisplayName -match '^[ -~]+$') { $p.DisplayName } elseif ($alAds | Where-Object { $p.DisplayName -like $_ }) { 'ALTools manager / update' } else { 'ALYac' }
+    if ($isSystem) { "Still installed: $n. Not removed at boot (its uninstaller needs a person): run pc_cleanup.ps1 from an administrator PowerShell."; continue }
+    Write-Host "Uninstall window of $n is opening: click through it (it may ask to type a code). The script goes on when it closes." -ForegroundColor Yellow
+    Start-Uninstall $p $false
+}
 
 # --- Every profile: per-user settings. Also look whether Desktop/Documents/... still live inside OneDrive
 # (moving them out is the job of pc_setup.ps1 = [first-time setup]; until then OneDrive stays).
@@ -167,6 +215,9 @@ foreach ($p in Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVers
     # File Explorer Home: no files from the Microsoft account's cloud (OneDrive / Office.com) among the recent files - OneDrive
     # is removed here, and old cloud files kept showing up (2026-11-17). = Folder Options > "Show files from Office.com" off.
     Add-Reg "HKU\$hive\Software\Microsoft\Windows\CurrentVersion\Explorer" /v ShowCloudFilesInQuickAccess /t REG_DWORD /d 0
+    # Settings sync ("Remember my preferences") is NOT switched off here: on Windows 11 26300 neither the old SettingSync values
+    # nor CloudStore\SyncPolicies\Default (1 = on, 3 = off when the person flips the switch) change the switch when a script
+    # writes them (tried on a Home PC, 2026-11-18). A person turns it off: step 12 of pc_guide.ps1 opens that page.
     # Ads and suggestions: lock screen tips, Start / Settings suggestions, silently installed apps, "finish setting up" screen,
     # "Windows welcome experience" after updates (310093).
     # Per-user settings, not policies, so they work on Home too.
@@ -234,6 +285,10 @@ Add-Reg 'HKLM\SOFTWARE\Policies\Microsoft\Windows\GameDVR' /v AllowGameDVR /t RE
 # with the Windows account by itself. Chrome needs nothing: it only knows Google accounts. Applies when Edge is restarted.
 Add-Reg 'HKLM\SOFTWARE\Policies\Microsoft\Edge' /v BrowserSignin /t REG_DWORD /d 0
 Add-Reg 'HKLM\SOFTWARE\Policies\Microsoft\Edge' /v MSAWebSiteSSOUsingThisProfileAllowed /t REG_DWORD /d 0
+# Settings sync ("Remember my preferences") off as a policy (2 = off; the second value = the person cannot turn it back
+# on). Windows 11 Home ignores it (2026-11-18: the switch stayed on); kept for Pro, not yet seen there.
+Add-Reg 'HKLM\SOFTWARE\Policies\Microsoft\Windows\SettingSync' /v DisableSettingSync /t REG_DWORD /d 2
+Add-Reg 'HKLM\SOFTWARE\Policies\Microsoft\Windows\SettingSync' /v DisableSettingSyncUserOverride /t REG_DWORD /d 1
 # No Widgets policy (Dsh\AllowNewsAndInterests): Windows 11 locks that key (access denied even as admin,
 # 2026-11-13). Widgets are gone anyway: their app (MicrosoftWindows.Client.WebExperience) is removed and deprovisioned above.
 Set-Policy 'Windows\CloudContent'   'DisableWindowsConsumerFeatures' # no auto-installed suggested apps (ignored on Home/Pro)
@@ -249,7 +304,7 @@ Register-ScheduledTask -TaskName RemoveBloat -Force `
 # --- Status for the admin: 2 minutes after any user logs on, write this PC's $version line to the NAS as <PC name>.txt
 # (file date = last logon). As the user, because only users have the NAS login (SYSTEM does not); office address first,
 # then the Tailscale name. conhost --headless = no window flashes up. No NAS = nothing happens, next logon tries again.
-$nas = 'Tools\pc_management\status\%COMPUTERNAME%.txt'
+$nas = "Tools\pc_management\status\$($env:COMPUTERNAME.ToLower()).txt"     # lowercase file name (2026-11-18); the name as it is at this boot
 $find = "findstr /b /l `$version $self"
 $logon = New-ScheduledTaskTrigger -AtLogOn; $logon.Delay = 'PT2M'
 Register-ScheduledTask -TaskName RemoveBloatStatus -Force `
@@ -276,8 +331,8 @@ Stop-Transcript | Out-Null
 # SIG # Begin signature block
 # MIIFZwYJKoZIhvcNAQcCoIIFWDCCBVQCAQExCzAJBgUrDgMCGgUAMGkGCisGAQQB
 # gjcCAQSgWzBZMDQGCisGAQQBgjcCAR4wJgIDAQAABBAfzDtgWUsITrck0sYpfvNR
-# AgEAAgEAAgEAAgEAAgEAMCEwCQYFKw4DAhoFAAQU3f7taPGbCgWPnqWh1ZzZ0Mqr
-# qnegggMEMIIDADCCAeigAwIBAgIQbJgRWdpsZZhGIWivjED1ojANBgkqhkiG9w0B
+# AgEAAgEAAgEAAgEAAgEAMCEwCQYFKw4DAhoFAAQUk9rZ5h7/g6FkfJsGuu/QD6ug
+# VQWgggMEMIIDADCCAeigAwIBAgIQbJgRWdpsZZhGIWivjED1ojANBgkqhkiG9w0B
 # AQsFADAYMRYwFAYDVQQDDA1KQyBwY19jbGVhbnVwMB4XDTI2MTExODAyMTEzOVoX
 # DTQ2MTExODAyMjEzOVowGDEWMBQGA1UEAwwNSkMgcGNfY2xlYW51cDCCASIwDQYJ
 # KoZIhvcNAQEBBQADggEPADCCAQoCggEBANdF7OMIUMnW2D5RUDZQ4yq+XfJ+JYAx
@@ -296,11 +351,11 @@ Stop-Transcript | Out-Null
 # 09BEDZn0MYk+BzGCAc0wggHJAgEBMCwwGDEWMBQGA1UEAwwNSkMgcGNfY2xlYW51
 # cAIQbJgRWdpsZZhGIWivjED1ojAJBgUrDgMCGgUAoHgwGAYKKwYBBAGCNwIBDDEK
 # MAigAoAAoQKAADAZBgkqhkiG9w0BCQMxDAYKKwYBBAGCNwIBBDAcBgorBgEEAYI3
-# AgELMQ4wDAYKKwYBBAGCNwIBFTAjBgkqhkiG9w0BCQQxFgQUkciMqiRMeKkDvi1/
-# nqUM3gpFrp8wDQYJKoZIhvcNAQEBBQAEggEAWmbI3G33n4KWsSnEqMQPsVOszg2W
-# dRKrZ5zqw49RmhG4T/PK9ZbU1M2ZOn1Pz+VGiJBHoWl9XxfsDi2s81h+GZMo1FzK
-# xc8KmlsOPVPEcOpWT4b8i4DKScKaE2UHt2a9T+3T0OzWo7MXaLwSQgTt0XHltByD
-# VJMScIdfZgigLsMpMMp3x2PnFm1H+T78qNTHqWVDeXTYdF4uMNE+vTjQqsz0OO9v
-# sR2ITXN0C72y59pfPCx9xuMnrhBbDPbCw/YHiIZkXoBHtnHhdRuPMLsxDx3NVmXq
-# WMxwAj/PJuktvH07hQwPDG8HCTeY+cwCW6pOQbQKrCbWf8BQ9C0SXEuIfw==
+# AgELMQ4wDAYKKwYBBAGCNwIBFTAjBgkqhkiG9w0BCQQxFgQUQ4O10UbHb2IWkeRr
+# qY8wFtdtob0wDQYJKoZIhvcNAQEBBQAEggEAM8GccFrZVikX+Nc0GNs8IPQ8O+e4
+# ZONPHrg+aSQmMKLTl2JJhWgEVLsGzYFl1+uV6HGyOFUbvVaOt7TEgPlYHpXkt1kz
+# 5EQheqB0RLM++TIykFKgpwlXilSOxtp5dhmSBzYMOV6SiHBF5Zx3uzTTVDeokezR
+# l1yYIhqDJw2vimUUTHvx5yM1e/8K7wXNM3ObTc/kle6Rwk+dLUmoCf6WuC3ytlND
+# ngk31G0g7TczajJwwqPHQYATBEl2S5RrlEYZgDcM+cJcCkFezaSFIS8160V0xCY1
+# CdYbv1UURuwxMtZc2gNe0kPurN+4a4ss6o3/cZGwGsyg27S8gNMhgkLBPw==
 # SIG # End signature block
