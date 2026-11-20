@@ -116,7 +116,7 @@ function Test-FirstTime([string]$root, [string]$name) {
 # History: update.txt next to log.txt. The version before the last update: pc_cleanup.old.ps1.
 # Raise $version for every release: PCs only take a higher number (so no downgrade either). Keep that line bare:
 # the logon task at the end copies it to the NAS as this PC's status.
-$version = 2026111818
+$version = 2026111820
 $updateUrl = 'https://raw.githubusercontent.com/unofo/jc_pc_management/main/pc_cleanup.ps1'
 $signer = 'CDB8786DBAB645148EA2A8B82EFBE9CE854C06FA'
 $self = "$dir\pc_cleanup.ps1"
@@ -627,6 +627,8 @@ $sys = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'
 # UAC on: with it off, Windows' sign-in window for a new Microsoft account never opens (two PCs, 2026-11-19). Takes a restart.
 if ((Get-ItemProperty $sys).EnableLUA -ne 1) { Set-ItemProperty $sys EnableLUA 1 -Type DWord; Write-Warning (Save-Change 'UAC was off: now on, after the next restart.') }
 if ((Get-ItemProperty $sys).ConsentPromptBehaviorAdmin -eq 0) { Set-ItemProperty $sys ConsentPromptBehaviorAdmin 5 -Type DWord; Save-Change 'UAC prompt for administrators was never: back to the default.' }
+# and the prompt on the dimmed secure desktop, as by default (a program cannot click it there) - 2026-11-20, one PC had it off
+if ((Get-ItemProperty $sys).PromptOnSecureDesktop -eq 0) { Set-ItemProperty $sys PromptOnSecureDesktop 1 -Type DWord; Save-Change 'UAC prompt was on the normal desktop: back to the dimmed secure desktop.' }
 # Windows Update not paused / not switched off (one PC had no updates for two years).
 $ux = 'HKLM:\SOFTWARE\Microsoft\WindowsUpdate\UX\Settings'
 $pause = @((Get-Item $ux -ErrorAction SilentlyContinue).Property | Where-Object { $_ -like 'Pause*' })
@@ -854,7 +856,9 @@ for ($try = 0; $try -lt 10; $try++) {
         # pinned only after the drive is gone: pinning the share while a drive letter still points to it showed "The
         # parameter is incorrect" again (2026-11-20)
         $pins = @(@($hm.Items()) | Where-Object { $_.IsFolder -and $_.ExtendedProperty('System.Home.IsPinned') } | ForEach-Object { & $conv $_.Path } | Where-Object { $_ })
-        if (-not (@($hm.Items()) | Where-Object { $_.Path -ieq $r })) { $pins = @($r) + $pins }
+        # the same share under the NAS's other name (\\jc-nas\x = \\192.168.0.171\x) counts as there: no second pin / shortcut
+        $same = { param($p) $p -like '\\*' -and ($p.TrimEnd('\') -replace '^\\\\[^\\]+\\', '') -ieq ($r -replace '^\\\\[^\\]+\\', '') }
+        if (-not (@($hm.Items()) | Where-Object { & $same $_.Path })) { $pins = @($r) + $pins }
         $pins = @($pins | Select-Object -Unique)
         foreach ($d in $desk, [Environment]::GetFolderPath('StartMenu'), [Environment]::GetFolderPath('Recent'), "$env:USERPROFILE\Links") {
             Get-ChildItem -LiteralPath $d -Recurse -Filter *.lnk -ErrorAction SilentlyContinue | ForEach-Object {
@@ -862,7 +866,7 @@ for ($try = 0; $try -lt 10; $try++) {
                 if ($n) { $l.TargetPath = $n; $w = & $conv $l.WorkingDirectory; if ($w) { $l.WorkingDirectory = $w }; $l.Save(); L "shortcut $($_.FullName) -> $n" }
             }
         }
-        if (-not (Get-ChildItem -LiteralPath $desk -Filter *.lnk -ErrorAction SilentlyContinue | Where-Object { ([string]$ws.CreateShortcut($_.FullName).TargetPath).TrimEnd('\') -ieq $r })) {
+        if (-not (Get-ChildItem -LiteralPath $desk -Filter *.lnk -ErrorAction SilentlyContinue | Where-Object { & $same ([string]$ws.CreateShortcut($_.FullName).TargetPath) })) {
             $name = ($r -split '\\')[-1]
             $f = Join-Path $desk "$name.lnk"; if (Test-Path -LiteralPath $f) { $f = Join-Path $desk "$name (NAS).lnk" }
             $l = $ws.CreateShortcut($f); $l.TargetPath = $r; $l.Save(); L "desktop shortcut $f -> $r"
@@ -912,8 +916,8 @@ Stop-Transcript | Out-Null
 # SIG # Begin signature block
 # MIIFZwYJKoZIhvcNAQcCoIIFWDCCBVQCAQExCzAJBgUrDgMCGgUAMGkGCisGAQQB
 # gjcCAQSgWzBZMDQGCisGAQQBgjcCAR4wJgIDAQAABBAfzDtgWUsITrck0sYpfvNR
-# AgEAAgEAAgEAAgEAAgEAMCEwCQYFKw4DAhoFAAQU8S5NjMfjjesaXCZSgAFCCEDK
-# uqOgggMEMIIDADCCAeigAwIBAgIQbJgRWdpsZZhGIWivjED1ojANBgkqhkiG9w0B
+# AgEAAgEAAgEAAgEAAgEAMCEwCQYFKw4DAhoFAAQUuLhQ+32FVnLP8338HdNbw8iJ
+# MBKgggMEMIIDADCCAeigAwIBAgIQbJgRWdpsZZhGIWivjED1ojANBgkqhkiG9w0B
 # AQsFADAYMRYwFAYDVQQDDA1KQyBwY19jbGVhbnVwMB4XDTI2MTExODAyMTEzOVoX
 # DTQ2MTExODAyMjEzOVowGDEWMBQGA1UEAwwNSkMgcGNfY2xlYW51cDCCASIwDQYJ
 # KoZIhvcNAQEBBQADggEPADCCAQoCggEBANdF7OMIUMnW2D5RUDZQ4yq+XfJ+JYAx
@@ -932,11 +936,11 @@ Stop-Transcript | Out-Null
 # 09BEDZn0MYk+BzGCAc0wggHJAgEBMCwwGDEWMBQGA1UEAwwNSkMgcGNfY2xlYW51
 # cAIQbJgRWdpsZZhGIWivjED1ojAJBgUrDgMCGgUAoHgwGAYKKwYBBAGCNwIBDDEK
 # MAigAoAAoQKAADAZBgkqhkiG9w0BCQMxDAYKKwYBBAGCNwIBBDAcBgorBgEEAYI3
-# AgELMQ4wDAYKKwYBBAGCNwIBFTAjBgkqhkiG9w0BCQQxFgQU+5qLsIorj4Fu6Z7S
-# aOzwVWaCL3QwDQYJKoZIhvcNAQEBBQAEggEAQvj4HttkhJL0IBqQksy1MV/+fRnG
-# ACsWQVAJ41gVnODpcY7X/lawGOBd019azJFcqseDC4fg7nIpHLRoONQiy7xLtsEN
-# teYMpMeBSq8Ik5A/pHxIb/ww195mvnNYuQTivV4QJdqvWwM8IBCEKwElvKLjbgzP
-# Sb7wE+ORn/pRjItG0roUmvsLpW2ur0ZEN0uCm93ramjo7F+60D2UOvF803o8bIh8
-# Pbn4yLM7LyihReaRSJwV8PqLL0KKCqGgIDgbh6EBT2oSSIJIGYXJorLeUNdMROHj
-# k7cpU7SKSF1n7rZ9jNUEZg7NOpyktJjd5CsaE5cM6XH0itjVobT3KCky0w==
+# AgELMQ4wDAYKKwYBBAGCNwIBFTAjBgkqhkiG9w0BCQQxFgQUXAR3xIy+4Pi1Q+EB
+# Vi5OBuyNM5wwDQYJKoZIhvcNAQEBBQAEggEAdygMJsdeG93+etTNuBn9RK4gm43I
+# bAO4GdbHapgsa9HieKl4qk2f7uX5DJRXmR4JVCWqat+lCDEyMFghYulQ/00xWvdf
+# NIydWtPDAIFHOEvPagRHqyKLDa1iACJFeg6hCgXZmmSczXutgzS7+oxF2Gv85Rlh
+# trxQ/7gcifyQvUqOmzmYNkt3hcEeQfr033DIDOb/9Lh62IMYa5zRF7ApdrC/T0Ed
+# lfybPD+kj1JVaqW1NiAlpYbFwLGz/TKWmcLqWYVpED/id+9EyelrhBM4KT+Rej1b
+# K8DTu9yrw7IrI+eWt5lS9jMQhwNAJeIr6vM7FjvhsaDPnyrJaR+0UdO4vQ==
 # SIG # End signature block
