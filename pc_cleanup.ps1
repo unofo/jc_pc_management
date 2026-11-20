@@ -116,7 +116,7 @@ function Test-FirstTime([string]$root, [string]$name) {
 # History: update.txt next to log.txt. The version before the last update: pc_cleanup.old.ps1.
 # Raise $version for every release: PCs only take a higher number (so no downgrade either). Keep that line bare:
 # the logon task at the end copies it to the NAS as this PC's status.
-$version = 2026111816
+$version = 2026111818
 $updateUrl = 'https://raw.githubusercontent.com/unofo/jc_pc_management/main/pc_cleanup.ps1'
 $signer = 'CDB8786DBAB645148EA2A8B82EFBE9CE854C06FA'
 $self = "$dir\pc_cleanup.ps1"
@@ -825,15 +825,76 @@ Register-ScheduledTask -TaskName RemoveBloatStatus -Force `
 # (seen 2026-11-18: never ran until started by hand). So run it once now - nobody logged on yet = the trigger does it.
 Start-ScheduledTask RemoveBloatStatus -ErrorAction SilentlyContinue
 
-# --- Network drives: at logon Windows shows mapped drives with a red X until someone opens them (the network, or Tailscale,
-# is not up yet when it tries). 30 s after logon, touch each of this user's mapped drives (HKCU\Network) - that is what a
-# click does - and retry every 30 s for 5 minutes for the ones not reachable yet. Never deletes or changes a mapping.
-$touch = 'foreach ($i in 1..10) { $k = @(Get-ChildItem HKCU:\Network -ErrorAction SilentlyContinue | Where-Object { -not (Test-Path ($_.PSChildName + '':\'')) }); if (-not $k) { break }; Start-Sleep 30 }'
+# --- Network drives -> shortcuts (2026-11-20, the admin: no mapped drives any more - they showed a red X after logon).
+# 30 s after logon, for each of this user's mapped drives (HKCU\Network) whose share answers: pin the share to Explorer
+# Home and put a shortcut to it on the desktop, point the user's pinned folders / shortcuts / recent links that use the
+# drive letter at the share, take the letter's entries out of Home, then disconnect the drive. A share that does not
+# answer (NAS off, Tailscale not up yet, share gone) keeps its drive: retried every 30 s for 5 minutes, then next logon.
+# Files are never touched. Log: %LOCALAPPDATA%\RemoveBloat_drives.txt
+$drives = @'
+$log = Join-Path $env:LOCALAPPDATA 'RemoveBloat_drives.txt'
+function L($m) { Add-Content -LiteralPath $log "$(Get-Date -Format s) $m" -Encoding UTF8 }
+$sh = New-Object -ComObject Shell.Application
+$ws = New-Object -ComObject WScript.Shell
+$hm = $sh.Namespace('shell:::{679f85cb-0220-4080-b29b-5540cc05aab6}')   # Explorer Home (Quick access)
+# Home's "remove from list" / "remove from Quick access" have no language-neutral verb: Korean names by code point, then English
+$rm = @((-join [char[]](0xBAA9, 0xB85D, 0xC5D0, 0xC11C, 0x20, 0xC81C, 0xAC70)), (-join [char[]](0xC990, 0xACA8, 0xCC3E, 0xAE30, 0xC5D0, 0xC11C, 0x20, 0xC81C, 0xAC70)), 'Remove from', 'Unpin from')
+$desk = [Environment]::GetFolderPath('Desktop')
+# pin through the parent folder: pinning a share's own folder object (\\nas\share) pins it but shows "The parameter is
+# incorrect" (2026-11-20), and that box holds this task until someone clicks OK
+function Pin($p) { $i = $p.TrimEnd('\').LastIndexOf('\'); $f = $sh.Namespace($p.Substring(0, $i)); if ($f -and ($x = $f.ParseName($p.Substring($i + 1)))) { $x.InvokeVerb('pintohome'); L "pinned $p" } }
+for ($try = 0; $try -lt 10; $try++) {
+    $wait = @()
+    foreach ($k in @(Get-ChildItem HKCU:\Network -ErrorAction SilentlyContinue)) {
+        $pre = $k.PSChildName.ToUpper() + ':'
+        $r = ([string](Get-ItemProperty $k.PSPath).RemotePath).TrimEnd('\')
+        if (-not $r -or -not (Test-Path -LiteralPath $r)) { $wait += "$pre $r"; continue }
+        $conv = { param($p) if ($p -and $p.Length -ge 2 -and $p.Substring(0, 2) -ieq $pre) { $r + $p.Substring(2).TrimEnd('\') } }
+        $null = @($hm.Items())   # the first listing can come back empty
+        # pinned only after the drive is gone: pinning the share while a drive letter still points to it showed "The
+        # parameter is incorrect" again (2026-11-20)
+        $pins = @(@($hm.Items()) | Where-Object { $_.IsFolder -and $_.ExtendedProperty('System.Home.IsPinned') } | ForEach-Object { & $conv $_.Path } | Where-Object { $_ })
+        if (-not (@($hm.Items()) | Where-Object { $_.Path -ieq $r })) { $pins = @($r) + $pins }
+        $pins = @($pins | Select-Object -Unique)
+        foreach ($d in $desk, [Environment]::GetFolderPath('StartMenu'), [Environment]::GetFolderPath('Recent'), "$env:USERPROFILE\Links") {
+            Get-ChildItem -LiteralPath $d -Recurse -Filter *.lnk -ErrorAction SilentlyContinue | ForEach-Object {
+                $l = $ws.CreateShortcut($_.FullName); $n = & $conv $l.TargetPath
+                if ($n) { $l.TargetPath = $n; $w = & $conv $l.WorkingDirectory; if ($w) { $l.WorkingDirectory = $w }; $l.Save(); L "shortcut $($_.FullName) -> $n" }
+            }
+        }
+        if (-not (Get-ChildItem -LiteralPath $desk -Filter *.lnk -ErrorAction SilentlyContinue | Where-Object { ([string]$ws.CreateShortcut($_.FullName).TargetPath).TrimEnd('\') -ieq $r })) {
+            $name = ($r -split '\\')[-1]
+            $f = Join-Path $desk "$name.lnk"; if (Test-Path -LiteralPath $f) { $f = Join-Path $desk "$name (NAS).lnk" }
+            $l = $ws.CreateShortcut($f); $l.TargetPath = $r; $l.Save(); L "desktop shortcut $f -> $r"
+        }
+        # the letter's entries in Home (pins, frequent folders, recent files) would be dead links once the drive is gone
+        foreach ($pass in 1..10) {
+            $old = @(@($hm.Items()) | Where-Object { & $conv $_.Path })
+            if (-not $old.Count) { break }
+            foreach ($i in $old) {
+                if ($i.ExtendedProperty('System.Home.IsPinned')) { $i.InvokeVerb('unpinfromhome') }
+                else { $v = @($i.Verbs()) | Where-Object { $vn = $_.Name; @($rm | Where-Object { $vn -like "$_*" }).Count } | Select-Object -First 1; if ($v) { $v.DoIt() } }
+                L "out of Home: $($i.Path)"
+            }
+            Start-Sleep 2
+        }
+        net use $pre /delete /y 2>&1 | Out-Null
+        Remove-Item "HKCU:\Network\$($k.PSChildName)" -Recurse -ErrorAction SilentlyContinue
+        L "drive $pre ($r) disconnected"
+        foreach ($p in $pins) { Pin $p }
+    }
+    if (-not $wait) { break }
+    Start-Sleep 30
+}
+foreach ($x in $wait) { L "drive kept, share not reachable: $x" }
+'@
+Set-Content "$dir\drives.ps1" $drives -Encoding ASCII
 $logon = New-ScheduledTaskTrigger -AtLogOn; $logon.Delay = 'PT30S'
 Register-ScheduledTask -TaskName RemoveBloatDrives -Force `
-    -Action (New-ScheduledTaskAction -Execute conhost.exe -Argument ("--headless powershell.exe -NoProfile -EncodedCommand " + [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($touch)))) `
+    -Action (New-ScheduledTaskAction -Execute conhost.exe -Argument "--headless powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$dir\drives.ps1`"") `
     -Trigger $logon -Settings $onBattery `
     -Principal (New-ScheduledTaskPrincipal -GroupId S-1-5-32-545) | Out-Null
+Start-ScheduledTask RemoveBloatDrives -ErrorAction SilentlyContinue   # same reason as RemoveBloatStatus above
 
 # --- Self-check: anything still installed is listed here and in log.txt
 # "Staged" for every entry = the files lie on the disk (factory image) but no user has the app; Windows keeps such copies and
@@ -851,8 +912,8 @@ Stop-Transcript | Out-Null
 # SIG # Begin signature block
 # MIIFZwYJKoZIhvcNAQcCoIIFWDCCBVQCAQExCzAJBgUrDgMCGgUAMGkGCisGAQQB
 # gjcCAQSgWzBZMDQGCisGAQQBgjcCAR4wJgIDAQAABBAfzDtgWUsITrck0sYpfvNR
-# AgEAAgEAAgEAAgEAAgEAMCEwCQYFKw4DAhoFAAQUirD1MK975ZWXxd8tZn/sZlfK
-# H9mgggMEMIIDADCCAeigAwIBAgIQbJgRWdpsZZhGIWivjED1ojANBgkqhkiG9w0B
+# AgEAAgEAAgEAAgEAAgEAMCEwCQYFKw4DAhoFAAQU8S5NjMfjjesaXCZSgAFCCEDK
+# uqOgggMEMIIDADCCAeigAwIBAgIQbJgRWdpsZZhGIWivjED1ojANBgkqhkiG9w0B
 # AQsFADAYMRYwFAYDVQQDDA1KQyBwY19jbGVhbnVwMB4XDTI2MTExODAyMTEzOVoX
 # DTQ2MTExODAyMjEzOVowGDEWMBQGA1UEAwwNSkMgcGNfY2xlYW51cDCCASIwDQYJ
 # KoZIhvcNAQEBBQADggEPADCCAQoCggEBANdF7OMIUMnW2D5RUDZQ4yq+XfJ+JYAx
@@ -871,11 +932,11 @@ Stop-Transcript | Out-Null
 # 09BEDZn0MYk+BzGCAc0wggHJAgEBMCwwGDEWMBQGA1UEAwwNSkMgcGNfY2xlYW51
 # cAIQbJgRWdpsZZhGIWivjED1ojAJBgUrDgMCGgUAoHgwGAYKKwYBBAGCNwIBDDEK
 # MAigAoAAoQKAADAZBgkqhkiG9w0BCQMxDAYKKwYBBAGCNwIBBDAcBgorBgEEAYI3
-# AgELMQ4wDAYKKwYBBAGCNwIBFTAjBgkqhkiG9w0BCQQxFgQUDiuZ4Vi3TrP5UFDL
-# ebUVxfnNTSowDQYJKoZIhvcNAQEBBQAEggEAZeUID0xxWUERTtJifrmYaKhnvRN5
-# VtUOdmbo/1G4sFatOvI6tmexknqcGETc9CKDJC4ZR4bas8v57/7kExLFTg60LHua
-# xgfdZdbC/OTDk4Ft6wCl8EfVgjKbTR6frYsrazWfLlobuH0sgyqt3F1I58+dN3Fr
-# BgfG1VyfD8FYyzK7EUPuKU3rTMBKBATe8P4XJAJ/QsesQlfWTyRmNX2r1Cv3Rgdg
-# 1+Gk89CAOwE8JILbD8gOo/uXcisTXDD9Ahya2cjLzVOultuKQL55uWZf0ZIayLul
-# nVBWHI5S0d5MmwytCYNvcWIt791eD74SvQPqw5vxz/v2QjW3UDEbqXIhTA==
+# AgELMQ4wDAYKKwYBBAGCNwIBFTAjBgkqhkiG9w0BCQQxFgQU+5qLsIorj4Fu6Z7S
+# aOzwVWaCL3QwDQYJKoZIhvcNAQEBBQAEggEAQvj4HttkhJL0IBqQksy1MV/+fRnG
+# ACsWQVAJ41gVnODpcY7X/lawGOBd019azJFcqseDC4fg7nIpHLRoONQiy7xLtsEN
+# teYMpMeBSq8Ik5A/pHxIb/ww195mvnNYuQTivV4QJdqvWwM8IBCEKwElvKLjbgzP
+# Sb7wE+ORn/pRjItG0roUmvsLpW2ur0ZEN0uCm93ramjo7F+60D2UOvF803o8bIh8
+# Pbn4yLM7LyihReaRSJwV8PqLL0KKCqGgIDgbh6EBT2oSSIJIGYXJorLeUNdMROHj
+# k7cpU7SKSF1n7rZ9jNUEZg7NOpyktJjd5CsaE5cM6XH0itjVobT3KCky0w==
 # SIG # End signature block
