@@ -119,7 +119,7 @@ function Test-FirstTime([string]$root, [string]$name) {
 # History: update.txt next to log.txt. The version before the last update: pc_cleanup.old.ps1.
 # Raise $version for every release: PCs only take a higher number (so no downgrade either). Keep that line bare:
 # the logon task at the end copies it to the NAS as this PC's status.
-$version = 2026111822
+$version = 2026111823
 $updateUrl = 'https://raw.githubusercontent.com/unofo/jc_pc_management/main/pc_cleanup.ps1'
 $signer = 'CDB8786DBAB645148EA2A8B82EFBE9CE854C06FA'
 $self = "$dir\pc_cleanup.ps1"
@@ -322,6 +322,21 @@ if ($holaSvc -or $hola -or (Test-Path "$env:ProgramFiles\Hola") -or (Test-Path "
     else { 'Hola VPN removed (not allowed on company PCs).' }
 }
 Add-Reg 'HKLM\SOFTWARE\Policies\Google\Chrome\ExtensionInstallBlocklist' /v 901 /t REG_SZ /d gkojfkhlekighikafcpjkiklfbnlmeio   # Hola VPN
+# SewonERP always runs as administrator (2026-11-21, the admin: it has to be set by hand after every install) = Properties >
+# Compatibility > "Change settings for all users" > "Run this program as an administrator": the exe's path in AppCompatFlags
+# \Layers (machine-wide) with RUNASADMIN. Found where it is usually installed (folders named Sewon* / ERP, as pc_setup looks).
+# Other compatibility flags already set on it stay.
+$layers = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\AppCompatFlags\Layers'
+$erpDirs = @(foreach ($root in "$env:SystemDrive\", $env:ProgramFiles, ${env:ProgramFiles(x86)}) {
+    Get-ChildItem -LiteralPath $root -Directory -ErrorAction SilentlyContinue | Where-Object Name -match 'sewon|^ERP$' })
+foreach ($exe in @($erpDirs | ForEach-Object { Get-ChildItem -LiteralPath $_.FullName -Filter SewonERP.exe -Recurse -Depth 2 -File -ErrorAction SilentlyContinue }) | Select-Object -ExpandProperty FullName -Unique) {
+    $cur = [string](Get-ItemProperty $layers -Name $exe -ErrorAction SilentlyContinue).$exe
+    if ($cur -match 'RUNASADMIN') { continue }
+    if (-not (Test-Path $layers)) { New-Item $layers -Force | Out-Null }
+    $new = if ($cur) { "$cur RUNASADMIN" } else { '~ RUNASADMIN' }
+    Set-ItemProperty $layers -Name $exe -Value $new
+    "SewonERP set to run as administrator: $exe"
+}
 # Browsers other than Chrome and Edge (decided 2026-11-19: one browser, Chrome; Edge cannot go). Found by their folder, so
 # a Korean display name does not matter. Quiet switches: Chromium setups (Whale, Brave, Vivaldi) take --force-uninstall,
 # Opera's launcher --runimmediately, Firefox's helper.exe /S. The user's profile (bookmarks, passwords) stays on the disk -
@@ -941,8 +956,8 @@ Stop-Transcript | Out-Null
 # SIG # Begin signature block
 # MIIFZwYJKoZIhvcNAQcCoIIFWDCCBVQCAQExCzAJBgUrDgMCGgUAMGkGCisGAQQB
 # gjcCAQSgWzBZMDQGCisGAQQBgjcCAR4wJgIDAQAABBAfzDtgWUsITrck0sYpfvNR
-# AgEAAgEAAgEAAgEAAgEAMCEwCQYFKw4DAhoFAAQUruMqYG0Q8bIgTCxNpWkgkntf
-# QMugggMEMIIDADCCAeigAwIBAgIQbJgRWdpsZZhGIWivjED1ojANBgkqhkiG9w0B
+# AgEAAgEAAgEAAgEAAgEAMCEwCQYFKw4DAhoFAAQUdWePYVtQ5Wt3Mx/5i6zkxsVY
+# BvqgggMEMIIDADCCAeigAwIBAgIQbJgRWdpsZZhGIWivjED1ojANBgkqhkiG9w0B
 # AQsFADAYMRYwFAYDVQQDDA1KQyBwY19jbGVhbnVwMB4XDTI2MTExODAyMTEzOVoX
 # DTQ2MTExODAyMjEzOVowGDEWMBQGA1UEAwwNSkMgcGNfY2xlYW51cDCCASIwDQYJ
 # KoZIhvcNAQEBBQADggEPADCCAQoCggEBANdF7OMIUMnW2D5RUDZQ4yq+XfJ+JYAx
@@ -961,11 +976,11 @@ Stop-Transcript | Out-Null
 # 09BEDZn0MYk+BzGCAc0wggHJAgEBMCwwGDEWMBQGA1UEAwwNSkMgcGNfY2xlYW51
 # cAIQbJgRWdpsZZhGIWivjED1ojAJBgUrDgMCGgUAoHgwGAYKKwYBBAGCNwIBDDEK
 # MAigAoAAoQKAADAZBgkqhkiG9w0BCQMxDAYKKwYBBAGCNwIBBDAcBgorBgEEAYI3
-# AgELMQ4wDAYKKwYBBAGCNwIBFTAjBgkqhkiG9w0BCQQxFgQUwTHhQo4hIzMS+wP+
-# UWvYuT6UdLswDQYJKoZIhvcNAQEBBQAEggEAGuBCjH4+2opqcPUxto+poZYjQtOZ
-# S5m12mF1wbrcYcsmFH0hBJX4GUw8UXi7wm0c8b2/vCp3n2Kip76edD4/mAEDudGB
-# blXBn+ZtVOhXd3TAs7nJ4LatECKLBgrIISgpMoa+YPbxRxXi6oj3YK+PXmoAdADY
-# x5jnfRwNpywtqZphkjOTnVSSpU7BSjRhF9ohC8YZ4gf99c/EETmRr2zgShsph7iM
-# 7114+8qy/WqdTmOVx6UYgDGaCI7muJ3hz2SOaVW7b4EnGwodmcZ34KmZ2SZa+alf
-# 1EI048MTZxhbE8n440npezxP/1rUMtbTfvp1NA7wmGCQbwGbX/Q4HE9v4w==
+# AgELMQ4wDAYKKwYBBAGCNwIBFTAjBgkqhkiG9w0BCQQxFgQUCZau2f5jFTuLLRg1
+# pTKI+UKDvb0wDQYJKoZIhvcNAQEBBQAEggEANHwk7xjbjcxVfrhsJmzmrE1WKlPr
+# qELnJyzFvdY7CeJxTDlGJ9p2+NrJlw4okVW/mOp3S2GRxlDtUkacKMmfDaaznQ/a
+# N8xZQBKoY6jSMf1jPLErvW6Bpkqpa+woUAkNiS+CqeejITO0cJb74G525kti52uM
+# dD4t5vUtR+MW0GYK+amBCe/hMd3FCIt9w5VkwmCqW+c9d4Fz0n7M3Ny02WjL+JZN
+# EVBEatJqw1hW7Cdof1BNZBN9kMPR5dJAaMvdLfKgIPoYtigQBdcS90Ol+1aaoGc0
+# MhCQdHenfIjFLobOWT/ijbWerdAD++tP2QoqQHMjeFpSzuCtHtz906UjRQ==
 # SIG # End signature block
