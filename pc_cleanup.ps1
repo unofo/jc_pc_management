@@ -119,7 +119,7 @@ function Test-FirstTime([string]$root, [string]$name) {
 # History: update.txt next to log.txt. The version before the last update: pc_cleanup.old.ps1.
 # Raise $version for every release: PCs only take a higher number (so no downgrade either). Keep that line bare:
 # the logon task at the end copies it to the NAS as this PC's status.
-$version = 2026111824
+$version = 2026111825
 $updateUrl = 'https://raw.githubusercontent.com/unofo/jc_pc_management/main/pc_cleanup.ps1'
 $signer = 'CDB8786DBAB645148EA2A8B82EFBE9CE854C06FA'
 $self = "$dir\pc_cleanup.ps1"
@@ -322,6 +322,13 @@ if ($holaSvc -or $hola -or (Test-Path "$env:ProgramFiles\Hola") -or (Test-Path "
     else { 'Hola VPN removed (not allowed on company PCs).' }
 }
 Add-Reg 'HKLM\SOFTWARE\Policies\Google\Chrome\ExtensionInstallBlocklist' /v 901 /t REG_SZ /d gkojfkhlekighikafcpjkiklfbnlmeio   # Hola VPN
+
+# The PC seller's web link (Assacom.url) on the desktop (2026-11-21): put in the Default user's Desktop, so every new
+# account got it again. Only .url files that point to that site.
+Get-ChildItem "$env:SystemDrive\Users" -Directory -Force -ErrorAction SilentlyContinue |      # -Force: Default is hidden
+    ForEach-Object { Get-ChildItem -LiteralPath (Join-Path $_.FullName 'Desktop') -Filter *.url -Force -ErrorAction SilentlyContinue } |
+    Where-Object { (Get-Content -LiteralPath $_.FullName -Raw -ErrorAction SilentlyContinue) -match 'assacom\.com' } |
+    ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue; "Seller's web link removed: $($_.FullName)" }
 # SewonERP always runs as administrator (2026-11-21, the admin: it has to be set by hand after every install) = Properties >
 # Compatibility > "Change settings for all users" > "Run this program as an administrator": the exe's path in AppCompatFlags
 # \Layers (machine-wide) with RUNASADMIN. Found where it is usually installed (folders named Sewon* / ERP, as pc_setup looks).
@@ -981,8 +988,8 @@ Stop-Transcript | Out-Null
 # SIG # Begin signature block
 # MIIFZwYJKoZIhvcNAQcCoIIFWDCCBVQCAQExCzAJBgUrDgMCGgUAMGkGCisGAQQB
 # gjcCAQSgWzBZMDQGCisGAQQBgjcCAR4wJgIDAQAABBAfzDtgWUsITrck0sYpfvNR
-# AgEAAgEAAgEAAgEAAgEAMCEwCQYFKw4DAhoFAAQUj2AgGYJ2rVfrpb2PVYNzU73y
-# eVCgggMEMIIDADCCAeigAwIBAgIQbJgRWdpsZZhGIWivjED1ojANBgkqhkiG9w0B
+# AgEAAgEAAgEAAgEAAgEAMCEwCQYFKw4DAhoFAAQUWoAfpIgfjkjdovKnXZeq4AxM
+# pNGgggMEMIIDADCCAeigAwIBAgIQbJgRWdpsZZhGIWivjED1ojANBgkqhkiG9w0B
 # AQsFADAYMRYwFAYDVQQDDA1KQyBwY19jbGVhbnVwMB4XDTI2MTExODAyMTEzOVoX
 # DTQ2MTExODAyMjEzOVowGDEWMBQGA1UEAwwNSkMgcGNfY2xlYW51cDCCASIwDQYJ
 # KoZIhvcNAQEBBQADggEPADCCAQoCggEBANdF7OMIUMnW2D5RUDZQ4yq+XfJ+JYAx
@@ -1001,11 +1008,11 @@ Stop-Transcript | Out-Null
 # 09BEDZn0MYk+BzGCAc0wggHJAgEBMCwwGDEWMBQGA1UEAwwNSkMgcGNfY2xlYW51
 # cAIQbJgRWdpsZZhGIWivjED1ojAJBgUrDgMCGgUAoHgwGAYKKwYBBAGCNwIBDDEK
 # MAigAoAAoQKAADAZBgkqhkiG9w0BCQMxDAYKKwYBBAGCNwIBBDAcBgorBgEEAYI3
-# AgELMQ4wDAYKKwYBBAGCNwIBFTAjBgkqhkiG9w0BCQQxFgQUZn8HewccKc2HoGVo
-# HV4kTe0pzPkwDQYJKoZIhvcNAQEBBQAEggEADEr2Z0HsFAjvJObWkaxoSoIsLvha
-# n2+e2JNZk3HyO/cTQrX1JYRHqKBvo1jXq1PyIYtLPuQbblwIzag4TMA5oQYYULFe
-# uJDX4Wyqj/LWrKzHy0BDPJn0ZxNcBf7FOJ5nfXxprlad7aF4yeB/1Dx0ZMsT5gNV
-# L36TCFKe1vcflmJLs1XozfxlA+7AQ4tqieWJ5vkPlX1j8nNVVeaqlHHdfbPiHNI5
-# 50BHvvr764MzB2eBCx3sesjMY+xJljA/ily0AmCzMzt5jkP5o7gwGVc5qHRj4kXG
-# 6idBkfIBB42rErsNgXZDUAA+9PyUC3EG9Geiq3aHl1LEQ+06niiP2PiNBw==
+# AgELMQ4wDAYKKwYBBAGCNwIBFTAjBgkqhkiG9w0BCQQxFgQUV5cRq+DwZu8V2NSI
+# UJoszDwi8kQwDQYJKoZIhvcNAQEBBQAEggEAsHRaqrBCPrpBI8n4prBfO/k0VbsR
+# w1NuaJg5xq+WTsZDb1MICkhVGtte5fzDMlb4mYC+8dVk/1YdTosaM6KIyVFw2Ga3
+# 2K3Z/UHd2jKOmAldsrhwzA1XUqN0atCzH054bKTuZr/tsM71vO4oUFr/3tzNN9WL
+# 0L4JEMVucchPV/F818z2CBJdDVgfCW7bkTtjtIHmcJokzyIuKgfIRtmiFRL8kc/N
+# thv0DNug3OqufunQ/wqiRR1V8sM42vkf8p2MPZsaXU2ypSRJZaro43BvIHrnxRtE
+# SpqFhx2pT3a5e3JOh73IU87VZ6o4eR4i3gRemYb/rpZVWN9mLjP9PzbI/Q==
 # SIG # End signature block
