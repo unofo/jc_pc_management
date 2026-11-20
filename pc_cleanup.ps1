@@ -119,7 +119,7 @@ function Test-FirstTime([string]$root, [string]$name) {
 # History: update.txt next to log.txt. The version before the last update: pc_cleanup.old.ps1.
 # Raise $version for every release: PCs only take a higher number (so no downgrade either). Keep that line bare:
 # the logon task at the end copies it to the NAS as this PC's status.
-$version = 2026111823
+$version = 2026111824
 $updateUrl = 'https://raw.githubusercontent.com/unofo/jc_pc_management/main/pc_cleanup.ps1'
 $signer = 'CDB8786DBAB645148EA2A8B82EFBE9CE854C06FA'
 $self = "$dir\pc_cleanup.ps1"
@@ -444,7 +444,9 @@ foreach ($p in Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVers
     $cdm = "HKU\$hive\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager"
     foreach ($v in 'RotatingLockScreenOverlayEnabled', 'SubscribedContent-310093Enabled', 'SubscribedContent-338387Enabled', 'SubscribedContent-338388Enabled',
                    'SubscribedContent-338389Enabled', 'SubscribedContent-353694Enabled', 'SubscribedContent-353696Enabled',
-                   'SystemPaneSuggestionsEnabled', 'SilentInstalledAppsEnabled', 'SoftLandingEnabled') {
+                   'SystemPaneSuggestionsEnabled', 'SilentInstalledAppsEnabled', 'SoftLandingEnabled',
+                   # the install-on-click pins Windows puts into an empty Start menu (Adobe Express, LinkedIn ... - 2026-11-21)
+                   'PreInstalledAppsEnabled', 'PreInstalledAppsEverEnabled', 'OemPreInstalledAppsEnabled') {
         Add-Reg $cdm /v $v /t REG_DWORD /d 0
     }
     Add-Reg "HKU\$hive\Software\Microsoft\Windows\CurrentVersion\UserProfileEngagement" /v ScoobeSystemSettingEnabled /t REG_DWORD /d 0
@@ -885,11 +887,34 @@ $desk = [Environment]::GetFolderPath('Desktop')
 # pin through the parent folder: pinning a share's own folder object (\\nas\share) pins it but shows "The parameter is
 # incorrect" (2026-11-20), and that box holds this task until someone clicks OK
 function Pin($p) { $i = $p.TrimEnd('\').LastIndexOf('\'); $f = $sh.Namespace($p.Substring(0, $i)); if ($f -and ($x = $f.ParseName($p.Substring($i + 1)))) { $x.InvokeVerb('pintohome'); L "pinned $p" } }
+# The NAS by the one address this PC is meant to use (2026-11-21, the admin): office desktops its office IP, notebooks and
+# warehouse PCs its Tailscale name - which one is in nas.txt (written by first-time setup). Pinned folders, desktop / Start
+# menu / taskbar shortcuts and the drives below are put on that address. No nas.txt = nothing is changed.
+$nasFile = Join-Path $env:ProgramData 'RemoveBloat\nas.txt'
+$nasUse = if (Test-Path $nasFile) { (Get-Content $nasFile -TotalCount 1).Trim() }
+function ToIp($p) {
+    if ($nasUse -eq '192.168.0.171') { $p -replace '^\\\\jc-nas(\.[^\\]*)?(?=\\)', '\\192.168.0.171' }
+    elseif ($nasUse -eq 'jc-nas') { $p -replace '^\\\\192\.168\.0\.171(?=\\)', '\\jc-nas' }
+    else { $p }
+}
+$null = @($hm.Items())
+foreach ($i in @(@($hm.Items()) | Where-Object { $_.IsFolder -and $_.ExtendedProperty('System.Home.IsPinned') -and (ToIp $_.Path) -ne $_.Path })) {
+    $n = ToIp $i.Path
+    # the old one out FIRST: pinning the share while the same share is still pinned under the other name showed "The
+    # parameter is incorrect" and waited for OK (2026-11-21)
+    if (Test-Path -LiteralPath $n) { $i.InvokeVerb('unpinfromhome'); Start-Sleep 1; Pin $n; L "pin $($i.Path) -> $n" }
+}
+foreach ($d in $desk, [Environment]::GetFolderPath('StartMenu'), "$env:APPDATA\Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar", "$env:USERPROFILE\Links") {
+    Get-ChildItem -LiteralPath $d -Recurse -Filter *.lnk -ErrorAction SilentlyContinue | ForEach-Object {
+        $l = $ws.CreateShortcut($_.FullName); $t = ToIp $l.TargetPath
+        if ($t -ne $l.TargetPath) { $l.TargetPath = $t; $w = ToIp $l.WorkingDirectory; if ($w) { $l.WorkingDirectory = $w }; $l.Save(); L "shortcut $($_.FullName) -> $t" }
+    }
+}
 for ($try = 0; $try -lt 10; $try++) {
     $wait = @()
     foreach ($k in @(Get-ChildItem HKCU:\Network -ErrorAction SilentlyContinue)) {
         $pre = $k.PSChildName.ToUpper() + ':'
-        $r = ([string](Get-ItemProperty $k.PSPath).RemotePath).TrimEnd('\')
+        $r = ToIp ([string](Get-ItemProperty $k.PSPath).RemotePath).TrimEnd('\')
         if (-not $r -or -not (Test-Path -LiteralPath $r)) { $wait += "$pre $r"; continue }
         $conv = { param($p) if ($p -and $p.Length -ge 2 -and $p.Substring(0, 2) -ieq $pre) { $r + $p.Substring(2).TrimEnd('\') } }
         $null = @($hm.Items())   # the first listing can come back empty
@@ -956,8 +981,8 @@ Stop-Transcript | Out-Null
 # SIG # Begin signature block
 # MIIFZwYJKoZIhvcNAQcCoIIFWDCCBVQCAQExCzAJBgUrDgMCGgUAMGkGCisGAQQB
 # gjcCAQSgWzBZMDQGCisGAQQBgjcCAR4wJgIDAQAABBAfzDtgWUsITrck0sYpfvNR
-# AgEAAgEAAgEAAgEAAgEAMCEwCQYFKw4DAhoFAAQUdWePYVtQ5Wt3Mx/5i6zkxsVY
-# BvqgggMEMIIDADCCAeigAwIBAgIQbJgRWdpsZZhGIWivjED1ojANBgkqhkiG9w0B
+# AgEAAgEAAgEAAgEAAgEAMCEwCQYFKw4DAhoFAAQUj2AgGYJ2rVfrpb2PVYNzU73y
+# eVCgggMEMIIDADCCAeigAwIBAgIQbJgRWdpsZZhGIWivjED1ojANBgkqhkiG9w0B
 # AQsFADAYMRYwFAYDVQQDDA1KQyBwY19jbGVhbnVwMB4XDTI2MTExODAyMTEzOVoX
 # DTQ2MTExODAyMjEzOVowGDEWMBQGA1UEAwwNSkMgcGNfY2xlYW51cDCCASIwDQYJ
 # KoZIhvcNAQEBBQADggEPADCCAQoCggEBANdF7OMIUMnW2D5RUDZQ4yq+XfJ+JYAx
@@ -976,11 +1001,11 @@ Stop-Transcript | Out-Null
 # 09BEDZn0MYk+BzGCAc0wggHJAgEBMCwwGDEWMBQGA1UEAwwNSkMgcGNfY2xlYW51
 # cAIQbJgRWdpsZZhGIWivjED1ojAJBgUrDgMCGgUAoHgwGAYKKwYBBAGCNwIBDDEK
 # MAigAoAAoQKAADAZBgkqhkiG9w0BCQMxDAYKKwYBBAGCNwIBBDAcBgorBgEEAYI3
-# AgELMQ4wDAYKKwYBBAGCNwIBFTAjBgkqhkiG9w0BCQQxFgQUCZau2f5jFTuLLRg1
-# pTKI+UKDvb0wDQYJKoZIhvcNAQEBBQAEggEANHwk7xjbjcxVfrhsJmzmrE1WKlPr
-# qELnJyzFvdY7CeJxTDlGJ9p2+NrJlw4okVW/mOp3S2GRxlDtUkacKMmfDaaznQ/a
-# N8xZQBKoY6jSMf1jPLErvW6Bpkqpa+woUAkNiS+CqeejITO0cJb74G525kti52uM
-# dD4t5vUtR+MW0GYK+amBCe/hMd3FCIt9w5VkwmCqW+c9d4Fz0n7M3Ny02WjL+JZN
-# EVBEatJqw1hW7Cdof1BNZBN9kMPR5dJAaMvdLfKgIPoYtigQBdcS90Ol+1aaoGc0
-# MhCQdHenfIjFLobOWT/ijbWerdAD++tP2QoqQHMjeFpSzuCtHtz906UjRQ==
+# AgELMQ4wDAYKKwYBBAGCNwIBFTAjBgkqhkiG9w0BCQQxFgQUZn8HewccKc2HoGVo
+# HV4kTe0pzPkwDQYJKoZIhvcNAQEBBQAEggEADEr2Z0HsFAjvJObWkaxoSoIsLvha
+# n2+e2JNZk3HyO/cTQrX1JYRHqKBvo1jXq1PyIYtLPuQbblwIzag4TMA5oQYYULFe
+# uJDX4Wyqj/LWrKzHy0BDPJn0ZxNcBf7FOJ5nfXxprlad7aF4yeB/1Dx0ZMsT5gNV
+# L36TCFKe1vcflmJLs1XozfxlA+7AQ4tqieWJ5vkPlX1j8nNVVeaqlHHdfbPiHNI5
+# 50BHvvr764MzB2eBCx3sesjMY+xJljA/ily0AmCzMzt5jkP5o7gwGVc5qHRj4kXG
+# 6idBkfIBB42rErsNgXZDUAA+9PyUC3EG9Geiq3aHl1LEQ+06niiP2PiNBw==
 # SIG # End signature block
