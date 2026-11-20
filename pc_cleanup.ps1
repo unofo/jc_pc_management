@@ -116,7 +116,7 @@ function Test-FirstTime([string]$root, [string]$name) {
 # History: update.txt next to log.txt. The version before the last update: pc_cleanup.old.ps1.
 # Raise $version for every release: PCs only take a higher number (so no downgrade either). Keep that line bare:
 # the logon task at the end copies it to the NAS as this PC's status.
-$version = 2026111820
+$version = 2026111821
 $updateUrl = 'https://raw.githubusercontent.com/unofo/jc_pc_management/main/pc_cleanup.ps1'
 $signer = 'CDB8786DBAB645148EA2A8B82EFBE9CE854C06FA'
 $self = "$dir\pc_cleanup.ps1"
@@ -297,6 +297,28 @@ if ($alQuiet) {
         Unregister-ScheduledTask -Confirm:$false
 }
 $quiet += $alQuiet
+# Hola VPN: never on a company PC (decided 2026-11-20, found on one PC). The free "VPN" lends this PC's internet connection
+# to strangers (its Bright Data / Luminati proxy network sells it), and it had put its folder on Defender's exclusion list.
+# Removed at EVERY boot. Its own uninstaller waits in a window, so it is taken apart directly: services, processes,
+# autostart, folder (also each user's AppData\Roaming\Hola), the Defender exclusion, its entry in the program list.
+# The Chrome extension "Hola VPN" is blocked by policy (extension id from the Chrome Web Store).
+$holaSvc = @(Get-CimInstance Win32_Service -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '^hola|luminati' -or $_.PathName -match '\\Hola\\' })
+$hola = @($programs | Where-Object { $_.DisplayName -like 'Hola*' -or "$($_.UninstallString)" -match '\\Hola\\' })
+if ($holaSvc -or $hola -or (Test-Path "$env:ProgramFiles\Hola") -or (Test-Path "${env:ProgramFiles(x86)}\Hola")) {
+    'Removing Hola VPN (not allowed on company PCs)...'
+    foreach ($s in $holaSvc) { Stop-Service $s.Name -Force -ErrorAction SilentlyContinue; cmd /c "sc delete `"$($s.Name)`" >nul 2>&1" }
+    Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -match '\\Hola\\' } | Stop-Process -Force -ErrorAction SilentlyContinue
+    foreach ($k in 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run', 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Run') {
+        (Get-ItemProperty $k -ErrorAction SilentlyContinue).PSObject.Properties | Where-Object { "$($_.Value)" -match '\\Hola\\' } | ForEach-Object { Remove-ItemProperty $k $_.Name -ErrorAction SilentlyContinue }
+    }
+    foreach ($p in "$env:ProgramFiles\Hola", "${env:ProgramFiles(x86)}\Hola") { if (Test-Path $p) { Remove-Item $p -Recurse -Force -ErrorAction SilentlyContinue } }
+    Get-ChildItem "$env:SystemDrive\Users\*\AppData\Roaming\Hola" -Directory -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+    (Get-MpPreference -ErrorAction SilentlyContinue).ExclusionPath | Where-Object { $_ -match '\\Hola\\?' } | ForEach-Object { Remove-MpPreference -ExclusionPath $_ -ErrorAction SilentlyContinue }
+    foreach ($p in $hola) { Remove-Item $p.PSPath -Recurse -Force -ErrorAction SilentlyContinue }
+    if (Test-Path "$env:ProgramFiles\Hola") { Write-Warning 'Hola VPN: its folder could not be deleted completely (in use) - again at the next boot.' }
+    else { 'Hola VPN removed (not allowed on company PCs).' }
+}
+Add-Reg 'HKLM\SOFTWARE\Policies\Google\Chrome\ExtensionInstallBlocklist' /v 901 /t REG_SZ /d gkojfkhlekighikafcpjkiklfbnlmeio   # Hola VPN
 # Browsers other than Chrome and Edge (decided 2026-11-19: one browser, Chrome; Edge cannot go). Found by their folder, so
 # a Korean display name does not matter. Quiet switches: Chromium setups (Whale, Brave, Vivaldi) take --force-uninstall,
 # Opera's launcher --runimmediately, Firefox's helper.exe /S. The user's profile (bookmarks, passwords) stays on the disk -
@@ -916,8 +938,8 @@ Stop-Transcript | Out-Null
 # SIG # Begin signature block
 # MIIFZwYJKoZIhvcNAQcCoIIFWDCCBVQCAQExCzAJBgUrDgMCGgUAMGkGCisGAQQB
 # gjcCAQSgWzBZMDQGCisGAQQBgjcCAR4wJgIDAQAABBAfzDtgWUsITrck0sYpfvNR
-# AgEAAgEAAgEAAgEAAgEAMCEwCQYFKw4DAhoFAAQUuLhQ+32FVnLP8338HdNbw8iJ
-# MBKgggMEMIIDADCCAeigAwIBAgIQbJgRWdpsZZhGIWivjED1ojANBgkqhkiG9w0B
+# AgEAAgEAAgEAAgEAAgEAMCEwCQYFKw4DAhoFAAQUiP0VRQMEyVDMrU6Uk26KVTUX
+# DmmgggMEMIIDADCCAeigAwIBAgIQbJgRWdpsZZhGIWivjED1ojANBgkqhkiG9w0B
 # AQsFADAYMRYwFAYDVQQDDA1KQyBwY19jbGVhbnVwMB4XDTI2MTExODAyMTEzOVoX
 # DTQ2MTExODAyMjEzOVowGDEWMBQGA1UEAwwNSkMgcGNfY2xlYW51cDCCASIwDQYJ
 # KoZIhvcNAQEBBQADggEPADCCAQoCggEBANdF7OMIUMnW2D5RUDZQ4yq+XfJ+JYAx
@@ -936,11 +958,11 @@ Stop-Transcript | Out-Null
 # 09BEDZn0MYk+BzGCAc0wggHJAgEBMCwwGDEWMBQGA1UEAwwNSkMgcGNfY2xlYW51
 # cAIQbJgRWdpsZZhGIWivjED1ojAJBgUrDgMCGgUAoHgwGAYKKwYBBAGCNwIBDDEK
 # MAigAoAAoQKAADAZBgkqhkiG9w0BCQMxDAYKKwYBBAGCNwIBBDAcBgorBgEEAYI3
-# AgELMQ4wDAYKKwYBBAGCNwIBFTAjBgkqhkiG9w0BCQQxFgQUXAR3xIy+4Pi1Q+EB
-# Vi5OBuyNM5wwDQYJKoZIhvcNAQEBBQAEggEAdygMJsdeG93+etTNuBn9RK4gm43I
-# bAO4GdbHapgsa9HieKl4qk2f7uX5DJRXmR4JVCWqat+lCDEyMFghYulQ/00xWvdf
-# NIydWtPDAIFHOEvPagRHqyKLDa1iACJFeg6hCgXZmmSczXutgzS7+oxF2Gv85Rlh
-# trxQ/7gcifyQvUqOmzmYNkt3hcEeQfr033DIDOb/9Lh62IMYa5zRF7ApdrC/T0Ed
-# lfybPD+kj1JVaqW1NiAlpYbFwLGz/TKWmcLqWYVpED/id+9EyelrhBM4KT+Rej1b
-# K8DTu9yrw7IrI+eWt5lS9jMQhwNAJeIr6vM7FjvhsaDPnyrJaR+0UdO4vQ==
+# AgELMQ4wDAYKKwYBBAGCNwIBFTAjBgkqhkiG9w0BCQQxFgQU+K77JgyHgkGhxCYN
+# PLpZMAkNjLIwDQYJKoZIhvcNAQEBBQAEggEAlW5TG2a8wrGn4YfjaOphGKUl5TKH
+# NyjqvWBHhznmjK3RDPC3XY5EREsEo1K0ag9oE5k2HisSrWI6VU1n/bToFrxG7H+g
+# K0knsl3MMIPR0PWU6AXhfCGhKZctZU5lhecs10n/CTIJecH1CvshLyKR3X4Wr0cq
+# 001ZFmBnKfG5jrG6hHdfcdhzILe6016xpIRZSgmgisyJ9gt3bYTPJcwgcjK/JOJZ
+# NeHgKSwvif6iVXkvOBSx+H76DOQlZXESfcB6qi55ln6h1FtUuCVY6erH0NADGXlf
+# 1r64nu3ds1vdJAsDvIBSzUab9uO4rCZ0mnO7Cye4keZ5APxxm7cPsNHfBA==
 # SIG # End signature block
