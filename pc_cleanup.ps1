@@ -57,6 +57,9 @@ $keepStartup = 'Tailscale|RustDesk|SecurityHealth|GoogleUpdater'
 # apps ...) never start at sign-in - switched off at EVERY boot, also when someone switched them on. Matched on the entry's
 # name or command, and for Store apps on the package name.
 $aiStartup = 'Claude|Anthropic|Gemini|ChatGPT|OpenAI|Codex|Perplexity|Comet'
+# and AhnLab Safe Transaction's tray program (decided 2026-11-20): only its start at sign-in is switched off - the program,
+# its service and drivers stay; a bank web site that needs it starts it. Not removed: banks would install it again.
+$offStartup = "$aiStartup|AhnLab Safe Transaction|AhnLab\\Safe Transaction"
 function New-RegKey([string]$key) { if (-not (Test-Path -LiteralPath "Registry::$key")) { New-Item -Path "Registry::$key" -Force | Out-Null } }   # -Force only for a missing key: on an existing one it would empty it
 # $only: switch off only the entries matching it, at every run (the AI apps); without it: every entry not kept, once
 function Disable-Startups([string]$runKey, [string]$approved, [string]$folder, [string]$only) {
@@ -116,7 +119,7 @@ function Test-FirstTime([string]$root, [string]$name) {
 # History: update.txt next to log.txt. The version before the last update: pc_cleanup.old.ps1.
 # Raise $version for every release: PCs only take a higher number (so no downgrade either). Keep that line bare:
 # the logon task at the end copies it to the NAS as this PC's status.
-$version = 2026111821
+$version = 2026111822
 $updateUrl = 'https://raw.githubusercontent.com/unofo/jc_pc_management/main/pc_cleanup.ps1'
 $signer = 'CDB8786DBAB645148EA2A8B82EFBE9CE854C06FA'
 $self = "$dir\pc_cleanup.ps1"
@@ -400,7 +403,7 @@ foreach ($p in Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVers
     Remove-DeadRun "HKU\$hive\Software\Microsoft\Windows\CurrentVersion\Run" $true
     $sa = "HKU\$hive\Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved"
     # the AI apps: at every boot (Run entries, the Startup folder, and the Store apps' startup tasks in UsrClass.dat)
-    Disable-Startups "HKU\$hive\Software\Microsoft\Windows\CurrentVersion\Run" "$sa\Run" $null $aiStartup
+    Disable-Startups "HKU\$hive\Software\Microsoft\Windows\CurrentVersion\Run" "$sa\Run" $null $offStartup
     Disable-Startups $null "$sa\StartupFolder" "$prof\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup" $aiStartup
     $cls = "${sid}_Classes"
     if (-not (Test-Path "Registry::HKEY_USERS\$cls")) {
@@ -507,8 +510,8 @@ if ($keepOneDrive) {
 Remove-DeadRun 'HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run' $false
 Remove-DeadRun 'HKLM\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Run' $false
 $sa = 'HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved'
-Disable-Startups 'HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run' "$sa\Run" $null $aiStartup
-Disable-Startups 'HKLM\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Run' "$sa\Run32" $null $aiStartup
+Disable-Startups 'HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run' "$sa\Run" $null $offStartup
+Disable-Startups 'HKLM\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Run' "$sa\Run32" $null $offStartup
 Disable-Startups $null "$sa\StartupFolder" "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\Startup" $aiStartup
 
 # new user profiles: drop the OneDriveSetup autorun from the default hive
@@ -938,8 +941,8 @@ Stop-Transcript | Out-Null
 # SIG # Begin signature block
 # MIIFZwYJKoZIhvcNAQcCoIIFWDCCBVQCAQExCzAJBgUrDgMCGgUAMGkGCisGAQQB
 # gjcCAQSgWzBZMDQGCisGAQQBgjcCAR4wJgIDAQAABBAfzDtgWUsITrck0sYpfvNR
-# AgEAAgEAAgEAAgEAAgEAMCEwCQYFKw4DAhoFAAQUiP0VRQMEyVDMrU6Uk26KVTUX
-# DmmgggMEMIIDADCCAeigAwIBAgIQbJgRWdpsZZhGIWivjED1ojANBgkqhkiG9w0B
+# AgEAAgEAAgEAAgEAAgEAMCEwCQYFKw4DAhoFAAQUruMqYG0Q8bIgTCxNpWkgkntf
+# QMugggMEMIIDADCCAeigAwIBAgIQbJgRWdpsZZhGIWivjED1ojANBgkqhkiG9w0B
 # AQsFADAYMRYwFAYDVQQDDA1KQyBwY19jbGVhbnVwMB4XDTI2MTExODAyMTEzOVoX
 # DTQ2MTExODAyMjEzOVowGDEWMBQGA1UEAwwNSkMgcGNfY2xlYW51cDCCASIwDQYJ
 # KoZIhvcNAQEBBQADggEPADCCAQoCggEBANdF7OMIUMnW2D5RUDZQ4yq+XfJ+JYAx
@@ -958,11 +961,11 @@ Stop-Transcript | Out-Null
 # 09BEDZn0MYk+BzGCAc0wggHJAgEBMCwwGDEWMBQGA1UEAwwNSkMgcGNfY2xlYW51
 # cAIQbJgRWdpsZZhGIWivjED1ojAJBgUrDgMCGgUAoHgwGAYKKwYBBAGCNwIBDDEK
 # MAigAoAAoQKAADAZBgkqhkiG9w0BCQMxDAYKKwYBBAGCNwIBBDAcBgorBgEEAYI3
-# AgELMQ4wDAYKKwYBBAGCNwIBFTAjBgkqhkiG9w0BCQQxFgQU+K77JgyHgkGhxCYN
-# PLpZMAkNjLIwDQYJKoZIhvcNAQEBBQAEggEAlW5TG2a8wrGn4YfjaOphGKUl5TKH
-# NyjqvWBHhznmjK3RDPC3XY5EREsEo1K0ag9oE5k2HisSrWI6VU1n/bToFrxG7H+g
-# K0knsl3MMIPR0PWU6AXhfCGhKZctZU5lhecs10n/CTIJecH1CvshLyKR3X4Wr0cq
-# 001ZFmBnKfG5jrG6hHdfcdhzILe6016xpIRZSgmgisyJ9gt3bYTPJcwgcjK/JOJZ
-# NeHgKSwvif6iVXkvOBSx+H76DOQlZXESfcB6qi55ln6h1FtUuCVY6erH0NADGXlf
-# 1r64nu3ds1vdJAsDvIBSzUab9uO4rCZ0mnO7Cye4keZ5APxxm7cPsNHfBA==
+# AgELMQ4wDAYKKwYBBAGCNwIBFTAjBgkqhkiG9w0BCQQxFgQUwTHhQo4hIzMS+wP+
+# UWvYuT6UdLswDQYJKoZIhvcNAQEBBQAEggEAGuBCjH4+2opqcPUxto+poZYjQtOZ
+# S5m12mF1wbrcYcsmFH0hBJX4GUw8UXi7wm0c8b2/vCp3n2Kip76edD4/mAEDudGB
+# blXBn+ZtVOhXd3TAs7nJ4LatECKLBgrIISgpMoa+YPbxRxXi6oj3YK+PXmoAdADY
+# x5jnfRwNpywtqZphkjOTnVSSpU7BSjRhF9ohC8YZ4gf99c/EETmRr2zgShsph7iM
+# 7114+8qy/WqdTmOVx6UYgDGaCI7muJ3hz2SOaVW7b4EnGwodmcZ34KmZ2SZa+alf
+# 1EI048MTZxhbE8n440npezxP/1rUMtbTfvp1NA7wmGCQbwGbX/Q4HE9v4w==
 # SIG # End signature block
