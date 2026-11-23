@@ -119,7 +119,7 @@ function Test-FirstTime([string]$root, [string]$name) {
 # History: update.txt next to log.txt. The version before the last update: pc_cleanup.old.ps1.
 # Raise $version for every release: PCs only take a higher number (so no downgrade either). Keep that line bare:
 # the logon task at the end copies it to the NAS as this PC's status.
-$version = 2026111825
+$version = 2026111826
 $updateUrl = 'https://raw.githubusercontent.com/unofo/jc_pc_management/main/pc_cleanup.ps1'
 $signer = 'CDB8786DBAB645148EA2A8B82EFBE9CE854C06FA'
 $self = "$dir\pc_cleanup.ps1"
@@ -322,6 +322,10 @@ if ($holaSvc -or $hola -or (Test-Path "$env:ProgramFiles\Hola") -or (Test-Path "
     else { 'Hola VPN removed (not allowed on company PCs).' }
 }
 Add-Reg 'HKLM\SOFTWARE\Policies\Google\Chrome\ExtensionInstallBlocklist' /v 901 /t REG_SZ /d gkojfkhlekighikafcpjkiklfbnlmeio   # Hola VPN
+# The company's shared Google accounts (*.jccompany@gmail.com) cannot become a Chrome profile account (decided 2026-11-23);
+# other Google accounts can. A profile already signed in with one is signed out by Chrome. Signing in on web pages still works.
+# Chrome reads it as an ICU regex, case-insensitive; an invalid pattern would block every account.
+Add-Reg 'HKLM\SOFTWARE\Policies\Google\Chrome' /v RestrictSigninToPattern /t REG_SZ /d '^(?!.*\.jccompany@gmail\.com$).*$'
 
 # The PC seller's web link (Assacom.url) on the desktop (2026-11-21): put in the Default user's Desktop, so every new
 # account got it again. Only .url files that point to that site.
@@ -988,8 +992,8 @@ Stop-Transcript | Out-Null
 # SIG # Begin signature block
 # MIIFZwYJKoZIhvcNAQcCoIIFWDCCBVQCAQExCzAJBgUrDgMCGgUAMGkGCisGAQQB
 # gjcCAQSgWzBZMDQGCisGAQQBgjcCAR4wJgIDAQAABBAfzDtgWUsITrck0sYpfvNR
-# AgEAAgEAAgEAAgEAAgEAMCEwCQYFKw4DAhoFAAQUWoAfpIgfjkjdovKnXZeq4AxM
-# pNGgggMEMIIDADCCAeigAwIBAgIQbJgRWdpsZZhGIWivjED1ojANBgkqhkiG9w0B
+# AgEAAgEAAgEAAgEAAgEAMCEwCQYFKw4DAhoFAAQUwv1P1H2muiYECFLrRuAwGzHO
+# WXegggMEMIIDADCCAeigAwIBAgIQbJgRWdpsZZhGIWivjED1ojANBgkqhkiG9w0B
 # AQsFADAYMRYwFAYDVQQDDA1KQyBwY19jbGVhbnVwMB4XDTI2MTExODAyMTEzOVoX
 # DTQ2MTExODAyMjEzOVowGDEWMBQGA1UEAwwNSkMgcGNfY2xlYW51cDCCASIwDQYJ
 # KoZIhvcNAQEBBQADggEPADCCAQoCggEBANdF7OMIUMnW2D5RUDZQ4yq+XfJ+JYAx
@@ -1008,11 +1012,11 @@ Stop-Transcript | Out-Null
 # 09BEDZn0MYk+BzGCAc0wggHJAgEBMCwwGDEWMBQGA1UEAwwNSkMgcGNfY2xlYW51
 # cAIQbJgRWdpsZZhGIWivjED1ojAJBgUrDgMCGgUAoHgwGAYKKwYBBAGCNwIBDDEK
 # MAigAoAAoQKAADAZBgkqhkiG9w0BCQMxDAYKKwYBBAGCNwIBBDAcBgorBgEEAYI3
-# AgELMQ4wDAYKKwYBBAGCNwIBFTAjBgkqhkiG9w0BCQQxFgQUV5cRq+DwZu8V2NSI
-# UJoszDwi8kQwDQYJKoZIhvcNAQEBBQAEggEAsHRaqrBCPrpBI8n4prBfO/k0VbsR
-# w1NuaJg5xq+WTsZDb1MICkhVGtte5fzDMlb4mYC+8dVk/1YdTosaM6KIyVFw2Ga3
-# 2K3Z/UHd2jKOmAldsrhwzA1XUqN0atCzH054bKTuZr/tsM71vO4oUFr/3tzNN9WL
-# 0L4JEMVucchPV/F818z2CBJdDVgfCW7bkTtjtIHmcJokzyIuKgfIRtmiFRL8kc/N
-# thv0DNug3OqufunQ/wqiRR1V8sM42vkf8p2MPZsaXU2ypSRJZaro43BvIHrnxRtE
-# SpqFhx2pT3a5e3JOh73IU87VZ6o4eR4i3gRemYb/rpZVWN9mLjP9PzbI/Q==
+# AgELMQ4wDAYKKwYBBAGCNwIBFTAjBgkqhkiG9w0BCQQxFgQURoqFXkw1C8H6YXNV
+# OE1lBh0SITAwDQYJKoZIhvcNAQEBBQAEggEAatTTTZsnL1pdHt+f0pyAmUgXWqzf
+# 4tAaSvfhP0wiN1XhOJ3+AZ+gxwENgV/v5zcPgl4oCAHlTif3AVT6WUM5YM/YdA94
+# kgY9OUSpNEDd500EX4R5rAWyOK8Z9Fuidle6JGqwX9YM7bTS71GCeqTtr6nbB3yf
+# C7ddJ/hXOV9YDicILdehQMN48C93yfYYCcTSA6DwAaE6PPwa0j4uTuwlPg+gZT4z
+# EX78sapIrkK1DOtCE1onbjFxbKeJRtnJ8/CIfg9Uqiv1v+8MH5i9RvnE01BkCFr4
+# e5d/PugzG2nlta45OOIcUXhUcc3/SNU5gyvjkIuU6tbvuu1mBMzi5jng9A==
 # SIG # End signature block
