@@ -119,7 +119,7 @@ function Test-FirstTime([string]$root, [string]$name) {
 # History: update.txt next to log.txt. The version before the last update: pc_cleanup.old.ps1.
 # Raise $version for every release: PCs only take a higher number (so no downgrade either). Keep that line bare:
 # the logon task at the end copies it to the NAS as this PC's status.
-$version = 2026111826
+$version = 2026112401
 $updateUrl = 'https://raw.githubusercontent.com/unofo/jc_pc_management/main/pc_cleanup.ps1'
 $signer = 'CDB8786DBAB645148EA2A8B82EFBE9CE854C06FA'
 $self = "$dir\pc_cleanup.ps1"
@@ -628,8 +628,10 @@ if ($fd -and $fd.StartType -ne 'Disabled') {
 # Networks "Public", not "Private" (decided 2026-11-19): other PCs on the office network cannot connect in, so one
 # infected PC does not spread to the rest. The NAS, printers, the internet, RustDesk and Tailscale are this PC going OUT
 # and work the same. Tailscale's own connection is left as it is (SSH comes in through it; its firewall rule is for any
-# network type). Scans INTO the PC by FTP: FBKRSSU's firewall rule already covers Public (checked on an office PC); Sindoh's
-# MyScan For Desktop had Private only, so its rule is widened to every network type.
+# network type). Scans INTO the PC by FTP: Sindoh's MyScan For Desktop had Private only, so its rule is widened to every
+# network type. FBKRSSU: where the first-run prompt was answered "Private" only, Windows also adds a Public BLOCK rule
+# (2026-11-24) - that rule is turned into Allow from the local subnet only (anonymous FTP: not from beyond the office LAN).
+# Its "Query User" Private rules refuse an added address condition, so they are left as they are.
 # ONCE per network (2026-11-19): a network seen before is left as it is, so a PC that really needs "Private" can be set
 # back by hand. Seen networks (by name): HKLM\SOFTWARE\RemoveBloat\NetworkSeen.
 $ns = 'HKLM\SOFTWARE\RemoveBloat\NetworkSeen'
@@ -644,6 +646,11 @@ Get-NetConnectionProfile -ErrorAction SilentlyContinue | Where-Object { $_.Inter
 Get-NetFirewallApplicationFilter -ErrorAction SilentlyContinue | Where-Object Program -like '*\myscanfordesktop.exe' | Get-NetFirewallRule |
     Where-Object { $_.Direction -eq 'Inbound' -and $_.Profile -ne 'Any' } | ForEach-Object {
         Set-NetFirewallRule -Name $_.Name -Profile Any; Save-Change "Firewall: '$($_.DisplayName)' allowed on every network type (was $($_.Profile))"
+    }
+Get-NetFirewallApplicationFilter -ErrorAction SilentlyContinue | Where-Object Program -like '*\fbkrssu.exe' | Get-NetFirewallRule |
+    Where-Object { $_.Direction -eq 'Inbound' -and $_.Action -eq 'Block' } | ForEach-Object {
+        Set-NetFirewallRule -Name $_.Name -Profile Any -Action Allow -RemoteAddress LocalSubnet
+        Save-Change "Firewall: '$($_.DisplayName)' changed from Block ($($_.Profile)) to Allow from the office network only"
     }
 
 # --- Speed (decided 2026-11-19). Services that only slow the boot / sit in memory:
@@ -992,8 +999,8 @@ Stop-Transcript | Out-Null
 # SIG # Begin signature block
 # MIIFZwYJKoZIhvcNAQcCoIIFWDCCBVQCAQExCzAJBgUrDgMCGgUAMGkGCisGAQQB
 # gjcCAQSgWzBZMDQGCisGAQQBgjcCAR4wJgIDAQAABBAfzDtgWUsITrck0sYpfvNR
-# AgEAAgEAAgEAAgEAAgEAMCEwCQYFKw4DAhoFAAQUwv1P1H2muiYECFLrRuAwGzHO
-# WXegggMEMIIDADCCAeigAwIBAgIQbJgRWdpsZZhGIWivjED1ojANBgkqhkiG9w0B
+# AgEAAgEAAgEAAgEAAgEAMCEwCQYFKw4DAhoFAAQU69PAOCVs/ydmCoBmJIjuT2NZ
+# iD2gggMEMIIDADCCAeigAwIBAgIQbJgRWdpsZZhGIWivjED1ojANBgkqhkiG9w0B
 # AQsFADAYMRYwFAYDVQQDDA1KQyBwY19jbGVhbnVwMB4XDTI2MTExODAyMTEzOVoX
 # DTQ2MTExODAyMjEzOVowGDEWMBQGA1UEAwwNSkMgcGNfY2xlYW51cDCCASIwDQYJ
 # KoZIhvcNAQEBBQADggEPADCCAQoCggEBANdF7OMIUMnW2D5RUDZQ4yq+XfJ+JYAx
@@ -1012,11 +1019,11 @@ Stop-Transcript | Out-Null
 # 09BEDZn0MYk+BzGCAc0wggHJAgEBMCwwGDEWMBQGA1UEAwwNSkMgcGNfY2xlYW51
 # cAIQbJgRWdpsZZhGIWivjED1ojAJBgUrDgMCGgUAoHgwGAYKKwYBBAGCNwIBDDEK
 # MAigAoAAoQKAADAZBgkqhkiG9w0BCQMxDAYKKwYBBAGCNwIBBDAcBgorBgEEAYI3
-# AgELMQ4wDAYKKwYBBAGCNwIBFTAjBgkqhkiG9w0BCQQxFgQURoqFXkw1C8H6YXNV
-# OE1lBh0SITAwDQYJKoZIhvcNAQEBBQAEggEAatTTTZsnL1pdHt+f0pyAmUgXWqzf
-# 4tAaSvfhP0wiN1XhOJ3+AZ+gxwENgV/v5zcPgl4oCAHlTif3AVT6WUM5YM/YdA94
-# kgY9OUSpNEDd500EX4R5rAWyOK8Z9Fuidle6JGqwX9YM7bTS71GCeqTtr6nbB3yf
-# C7ddJ/hXOV9YDicILdehQMN48C93yfYYCcTSA6DwAaE6PPwa0j4uTuwlPg+gZT4z
-# EX78sapIrkK1DOtCE1onbjFxbKeJRtnJ8/CIfg9Uqiv1v+8MH5i9RvnE01BkCFr4
-# e5d/PugzG2nlta45OOIcUXhUcc3/SNU5gyvjkIuU6tbvuu1mBMzi5jng9A==
+# AgELMQ4wDAYKKwYBBAGCNwIBFTAjBgkqhkiG9w0BCQQxFgQUUPrf1ya+IF1OKrWA
+# BpHUt99JozQwDQYJKoZIhvcNAQEBBQAEggEAhbFoDF1lv2gUDjO060N4sujsGQHc
+# Y/EkzEClaTnQJL/R3JV/NnM1GqwhJPS8qgYRqiHX16FwBOr1pSSYy1KuJXzPgN99
+# ajS/QA7waOuyeHgo5wTk3lGZnKp9+ud418Yih5D8D0Dv6vlPJ1EjK+/g6IlqtwBn
+# uVo1mgBm9sdBMsjLWlM+h2Y+2iPtWCzytFocr0qYYc+KC9Z3UOzR98ENtm/Hp6nw
+# wsm4C/t/045nb6jczswYFq1nBsWAoaHA49dj1b8RW4TSC1OSaqAZdtEHXZTu7PLH
+# EhLQ48nmXDZwulMJuqDGce3UhjLGTzaRgh5cP3R4i5/TudSo3al7ZgZ2GA==
 # SIG # End signature block
