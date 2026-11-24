@@ -119,7 +119,7 @@ function Test-FirstTime([string]$root, [string]$name) {
 # History: update.txt next to log.txt. The version before the last update: pc_cleanup.old.ps1.
 # Raise $version for every release: PCs only take a higher number (so no downgrade either). Keep that line bare:
 # the logon task at the end copies it to the NAS as this PC's status.
-$version = 2026112401
+$version = 2026112402
 $updateUrl = 'https://raw.githubusercontent.com/unofo/jc_pc_management/main/pc_cleanup.ps1'
 $signer = 'CDB8786DBAB645148EA2A8B82EFBE9CE854C06FA'
 $self = "$dir\pc_cleanup.ps1"
@@ -388,6 +388,18 @@ foreach ($p in $byHand) {
 # (moving them out is the job of pc_setup.ps1 = [first-time setup]; until then OneDrive stays).
 $folders = 'Desktop', 'Personal', 'My Pictures', 'My Music', 'My Video'
 $keepOneDrive = $false
+$scanDir = "$env:SystemDrive\scan"; $oldScan = "$env:SystemDrive\FBKR_SCAN"
+# Moves an old scan folder's files into C:\scan, never overwriting; removes the folder only when nothing is left in it.
+function Move-ScanFolder($src) {
+    robocopy $src $scanDir /E /MOVE /XC /XN /XO /R:1 /W:1 /NP /NFL /NDL /NJH /NJS | Out-Null
+    # Test-Path first: robocopy /MOVE removes an emptied folder, and Get-ChildItem -Recurse on a missing path searches
+    # the whole parent (C:\) for that name in PowerShell 5.1.
+    if ((Test-Path -LiteralPath $src) -and (Get-ChildItem -LiteralPath $src -Recurse -File -Force -ErrorAction SilentlyContinue | Select-Object -First 1)) {
+        Write-Warning "Scan folder: files left in $src (same names already in $scanDir) - not removed."; return $false
+    }
+    Remove-Item -LiteralPath $src -Recurse -Force -ErrorAction SilentlyContinue
+    -not (Test-Path -LiteralPath $src)
+}
 foreach ($p in Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\S-1-5-21-*') {
     $sid = $p.PSChildName; $prof = $p.ProfileImagePath
     $hive = $sid
@@ -520,6 +532,19 @@ foreach ($p in Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVers
             Add-Reg $dk /v ScreenSaveActive /t REG_SZ /d 0
         }
     }
+    # Scans live in C:\scan (decided 2026-11-24). This person's old scan folders - "scan" on the desktop, and the scan app's
+    # (FBKRSSU) save folder when it is named scan / FBKR_SCAN - are moved there; the app is pointed at C:\scan.
+    # C:\FBKR_SCAN itself is handled once, further down.
+    $ssuKey = "Registry::HKU\$hive\SOFTWARE\FBKR\FBKRSSU"
+    $ssuHome = (Get-ItemProperty $ssuKey -Name HomePath -ErrorAction SilentlyContinue).HomePath
+    $oldDirs = @("$desk\scan")
+    if ($ssuHome -and (Split-Path $ssuHome -Leaf) -in 'scan', 'FBKR_SCAN' -and $ssuHome -ne $scanDir) {
+        Set-ItemProperty $ssuKey -Name HomePath -Value $scanDir; "Scan app of ${prof}: save folder $ssuHome -> $scanDir"
+        if ($ssuHome -ne $oldScan) { $oldDirs += $ssuHome }
+    }
+    foreach ($d in $oldDirs | Select-Object -Unique) {
+        if (Test-Path -LiteralPath $d -PathType Container) { if (Move-ScanFolder $d) { "Scan folder $d moved into $scanDir and removed" } }
+    }
     if ($hive -ne $sid) { [gc]::Collect(); [gc]::WaitForPendingFinalizers(); reg unload "HKU\$hive" 2>$null | Out-Null }
 }
 
@@ -647,6 +672,41 @@ Get-NetFirewallApplicationFilter -ErrorAction SilentlyContinue | Where-Object Pr
     Where-Object { $_.Direction -eq 'Inbound' -and $_.Profile -ne 'Any' } | ForEach-Object {
         Set-NetFirewallRule -Name $_.Name -Profile Any; Save-Change "Firewall: '$($_.DisplayName)' allowed on every network type (was $($_.Profile))"
     }
+# Scan receiver on every PC (decided 2026-11-24): the Sindoh MFP sends scans by FTP to each person's PC. FUJIFILM's
+# Simple Scanner Utility is installed when missing (signed by FUJIFILM BI Korea; the zip name carries its release date,
+# so a newer release breaks the link -> a warning, then update the URL). Its installer starts the app as SYSTEM (session 0,
+# unconfigured) - stopped; each person sets it up once from the tray icon (folder C:\scan, Anonymous, auto start).
+$ssuExe = "$env:ProgramFiles\FUJIFILM Business Innovation Korea\FBKRSSU\FBKRSSU.exe"
+if (-not (Test-Path $ssuExe)) {
+    $zip = "$dir\ssu.zip"; $ux = "$dir\ssu"
+    try {
+        Invoke-WebRequest 'https://support-fb.fujifilm.com/driver_downloads/FBKRSSU20261021KO.zip' -OutFile $zip -UseBasicParsing -TimeoutSec 300
+        Expand-Archive $zip $ux -Force
+        $setup = Get-ChildItem $ux -Filter 'FBKRSSU*.exe' | Select-Object -First 1
+        $sig = Get-AuthenticodeSignature $setup.FullName
+        if ($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -notlike '*FUJIFILM Business Innovation Korea*') {
+            Write-Warning "Scan app: installer not signed by FUJIFILM ($($sig.Status)), not run."
+        } else {
+            $p = Start-Process $setup.FullName '/S' -PassThru
+            if (-not $p.WaitForExit(600000)) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue; Write-Warning 'Scan app: install did not end in 10 minutes.' }
+            elseif (Test-Path $ssuExe) { Save-Change 'Scan app installed: Simple Scanner Utility (FUJIFILM, receives FTP scans)' }
+            else { Write-Warning "Scan app: installer ended (code $($p.ExitCode)) but FBKRSSU.exe is missing." }
+            Start-Sleep 3
+            Get-Process FBKRSSU -ErrorAction SilentlyContinue | Where-Object SessionId -eq 0 | Stop-Process -Force -ErrorAction SilentlyContinue
+        }
+    } catch { Write-Warning "Scan app: download or install failed: $_" }
+    Remove-Item $zip, $ux -Recurse -Force -ErrorAction SilentlyContinue
+}
+# Scan folder = C:\scan on every PC. The app's default C:\FBKR_SCAN (made when it first runs) goes the same way as the
+# per-person scan folders above (Move-ScanFolder).
+if (-not (Test-Path $scanDir)) { New-Item $scanDir -ItemType Directory | Out-Null; Save-Change "Folder made: $scanDir (scans)" }
+# A desktop shortcut "scan" for everyone (Public desktop; decided 2026-11-24).
+$scanLnk = "$env:PUBLIC\Desktop\scan.lnk"
+if (-not (Test-Path $scanLnk)) {
+    $l = (New-Object -ComObject WScript.Shell).CreateShortcut($scanLnk); $l.TargetPath = $scanDir; $l.Save()
+    Save-Change "Desktop shortcut made: scan -> $scanDir"
+}
+if ((Test-Path $oldScan) -and (Move-ScanFolder $oldScan)) { Save-Change "Folder removed: $oldScan (its files, if any, moved to $scanDir)" }
 Get-NetFirewallApplicationFilter -ErrorAction SilentlyContinue | Where-Object Program -like '*\fbkrssu.exe' | Get-NetFirewallRule |
     Where-Object { $_.Direction -eq 'Inbound' -and $_.Action -eq 'Block' } | ForEach-Object {
         Set-NetFirewallRule -Name $_.Name -Profile Any -Action Allow -RemoteAddress LocalSubnet
@@ -999,8 +1059,8 @@ Stop-Transcript | Out-Null
 # SIG # Begin signature block
 # MIIFZwYJKoZIhvcNAQcCoIIFWDCCBVQCAQExCzAJBgUrDgMCGgUAMGkGCisGAQQB
 # gjcCAQSgWzBZMDQGCisGAQQBgjcCAR4wJgIDAQAABBAfzDtgWUsITrck0sYpfvNR
-# AgEAAgEAAgEAAgEAAgEAMCEwCQYFKw4DAhoFAAQU69PAOCVs/ydmCoBmJIjuT2NZ
-# iD2gggMEMIIDADCCAeigAwIBAgIQbJgRWdpsZZhGIWivjED1ojANBgkqhkiG9w0B
+# AgEAAgEAAgEAAgEAAgEAMCEwCQYFKw4DAhoFAAQUYtN07m32+DDCVcS0nLh56UQz
+# mm+gggMEMIIDADCCAeigAwIBAgIQbJgRWdpsZZhGIWivjED1ojANBgkqhkiG9w0B
 # AQsFADAYMRYwFAYDVQQDDA1KQyBwY19jbGVhbnVwMB4XDTI2MTExODAyMTEzOVoX
 # DTQ2MTExODAyMjEzOVowGDEWMBQGA1UEAwwNSkMgcGNfY2xlYW51cDCCASIwDQYJ
 # KoZIhvcNAQEBBQADggEPADCCAQoCggEBANdF7OMIUMnW2D5RUDZQ4yq+XfJ+JYAx
@@ -1019,11 +1079,11 @@ Stop-Transcript | Out-Null
 # 09BEDZn0MYk+BzGCAc0wggHJAgEBMCwwGDEWMBQGA1UEAwwNSkMgcGNfY2xlYW51
 # cAIQbJgRWdpsZZhGIWivjED1ojAJBgUrDgMCGgUAoHgwGAYKKwYBBAGCNwIBDDEK
 # MAigAoAAoQKAADAZBgkqhkiG9w0BCQMxDAYKKwYBBAGCNwIBBDAcBgorBgEEAYI3
-# AgELMQ4wDAYKKwYBBAGCNwIBFTAjBgkqhkiG9w0BCQQxFgQUUPrf1ya+IF1OKrWA
-# BpHUt99JozQwDQYJKoZIhvcNAQEBBQAEggEAhbFoDF1lv2gUDjO060N4sujsGQHc
-# Y/EkzEClaTnQJL/R3JV/NnM1GqwhJPS8qgYRqiHX16FwBOr1pSSYy1KuJXzPgN99
-# ajS/QA7waOuyeHgo5wTk3lGZnKp9+ud418Yih5D8D0Dv6vlPJ1EjK+/g6IlqtwBn
-# uVo1mgBm9sdBMsjLWlM+h2Y+2iPtWCzytFocr0qYYc+KC9Z3UOzR98ENtm/Hp6nw
-# wsm4C/t/045nb6jczswYFq1nBsWAoaHA49dj1b8RW4TSC1OSaqAZdtEHXZTu7PLH
-# EhLQ48nmXDZwulMJuqDGce3UhjLGTzaRgh5cP3R4i5/TudSo3al7ZgZ2GA==
+# AgELMQ4wDAYKKwYBBAGCNwIBFTAjBgkqhkiG9w0BCQQxFgQUCmBGVdbMS8WMkNOb
+# 7cSQbh2LooAwDQYJKoZIhvcNAQEBBQAEggEAd6dd5b0HG1XCFnid24Fz2mMtDxC4
+# tVpFE+Oanhv145RRds+hljF83aKJH4yF4roK1FNCTWcnZbYdKn1VwttBvc6UiHT+
+# 34hQQFuMS4Vb+9VCyt7sZsztltIi2ZDYDSEasmyvt8ttw4vfGyM+X2Rn5Z1QTNbp
+# AaAgMkd0Aa1b0x0/ytQLxFoDuPYHZMGZ0G1uED3UhCMHbjuVco8pRvYLdU65F8oL
+# BbRy0ZpIGa3UDvDixBSzs29i8ISF9Rgppg6clkzq3oVykSK9hIrPhD7uUjqTvrUu
+# sJHQbAYv0zjFrX+2RXhMG1HCiVBANPuvbv08b7XnTiZRRDmruaX+Wwbcsw==
 # SIG # End signature block
