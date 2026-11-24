@@ -119,7 +119,7 @@ function Test-FirstTime([string]$root, [string]$name) {
 # History: update.txt next to log.txt. The version before the last update: pc_cleanup.old.ps1.
 # Raise $version for every release: PCs only take a higher number (so no downgrade either). Keep that line bare:
 # the logon task at the end copies it to the NAS as this PC's status.
-$version = 2026112403
+$version = 2026112404
 $updateUrl = 'https://raw.githubusercontent.com/unofo/jc_pc_management/main/pc_cleanup.ps1'
 $signer = 'CDB8786DBAB645148EA2A8B82EFBE9CE854C06FA'
 $self = "$dir\pc_cleanup.ps1"
@@ -389,6 +389,9 @@ foreach ($p in $byHand) {
 $folders = 'Desktop', 'Personal', 'My Pictures', 'My Music', 'My Video'
 $keepOneDrive = $false
 $scanDir = "$env:SystemDrive\scan"; $oldScan = "$env:SystemDrive\FBKR_SCAN"
+# PCs that receive scans (decided 2026-11-24): the office desktops, numbers 01 to 11 (laptops and the warehouse PCs do not).
+$scanPc = $env:COMPUTERNAME -match '^jc-(0[1-9]|1[01])$' -and -not (Get-CimInstance Win32_Battery -ErrorAction SilentlyContinue)
+$officeNic = Get-NetIPConfiguration -ErrorAction SilentlyContinue | Where-Object { $_.IPv4DefaultGateway.NextHop -eq '192.168.0.1' } | Select-Object -First 1
 # Moves an old scan folder's files into C:\scan, never overwriting; removes the folder only when nothing is left in it.
 function Move-ScanFolder($src) {
     robocopy $src $scanDir /E /MOVE /XC /XN /XO /R:1 /W:1 /NP /NFL /NDL /NJH /NJS | Out-Null
@@ -542,7 +545,18 @@ foreach ($p in Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVers
         Set-ItemProperty $ssuKey -Name HomePath -Value $scanDir; "Scan app of ${prof}: save folder $ssuHome -> $scanDir"
         if ($ssuHome -ne $oldScan) { $oldDirs += $ssuHome }
     }
-    # Its "auto start" box writes no Run entry (the app runs without admin rights; seen on jc-07): add it for this person.
+    # Not set up yet on a scan PC: set it up the way its tray dialog does (office adapter, C:\scan, Anonymous, port 21,
+    # auto start). A person's own settings are never overwritten.
+    if ($scanPc -and $officeNic -and -not (Get-ItemProperty $ssuKey -Name HomePath -ErrorAction SilentlyContinue)) {
+        New-Item $ssuKey -Force | Out-Null
+        New-ItemProperty $ssuKey -Name NIC -PropertyType String -Value $officeNic.NetAdapter.InterfaceGuid -Force | Out-Null
+        New-ItemProperty $ssuKey -Name HomePath -PropertyType String -Value $scanDir -Force | Out-Null
+        foreach ($v in @{ Port = 21; Timeout = 5; LaunchOnStartup = 1; IsAnonymous = 1; IsPlainScan = 0 }.GetEnumerator()) {
+            New-ItemProperty $ssuKey -Name $v.Key -PropertyType DWord -Value $v.Value -Force | Out-Null
+        }
+        "Scan app of ${prof}: set up ($scanDir, anonymous, port 21, auto start)"
+    }
+    # Its "auto start" box writes no Run entry (the app runs without admin rights; seen on an office PC): add it for this person.
     $runKey = "Registry::HKU\$hive\Software\Microsoft\Windows\CurrentVersion\Run"
     if ((Get-ItemProperty $ssuKey -Name LaunchOnStartup -ErrorAction SilentlyContinue).LaunchOnStartup -eq 1 -and
         -not (Get-ItemProperty $runKey -Name FBKRSSU -ErrorAction SilentlyContinue)) {
@@ -725,6 +739,53 @@ Get-NetFirewallApplicationFilter -ErrorAction SilentlyContinue | Where-Object Pr
         Set-NetFirewallRule -Name $_.Name -Profile Any -Action Allow -RemoteAddress LocalSubnet
         Save-Change "Firewall: '$($_.DisplayName)' changed from Block ($($_.Profile)) to Allow from the office network only"
     }
+# Fixed office address 192.168.0.2NN for PC number NN (decided 2026-11-24; the firewall's DHCP cannot reserve addresses for us).
+# Not when the address answers from another device; reverted to automatic when the network does not work afterwards.
+# Not on a PC with a bank program: some register the PC's address, so that one is changed by hand with the person there.
+if ($scanPc -and $officeNic) {
+    $ip = '192.168.0.' + (200 + [int]($env:COMPUTERNAME -replace '\D', ''))
+    $gw = '192.168.0.1'; $idx = $officeNic.InterfaceIndex
+    $cur = @($officeNic.IPv4Address.IPAddress)
+    $dhcp = (Get-NetIPInterface -InterfaceIndex $idx -AddressFamily IPv4).Dhcp
+    function Test-OfficeNet { (Test-Connection $gw -Count 2 -Quiet) -and (Test-NetConnection 'www.microsoft.com' -Port 443 -InformationLevel Quiet -WarningAction SilentlyContinue) }
+    if ($dhcp -eq 'Disabled' -and $cur -contains $ip) { "IP: already fixed at $ip." }
+    elseif (@(Test-Path "$env:SystemDrive\ShinhanBank", "$env:SystemDrive\HanaFX") -contains $true) { "IP: not fixed ($ip) - bank program on this PC, to be done by hand." }
+    elseif ($cur -notcontains $ip -and ((Test-Connection $ip -Count 2 -Quiet) -or (Get-NetNeighbor -IPAddress $ip -ErrorAction SilentlyContinue |
+            Where-Object { $_.State -in 'Reachable', 'Stale', 'Delay', 'Probe' -and $_.LinkLayerAddress -notmatch '^(00-){5}00$' }))) {
+        Write-Warning "IP: $ip is used by another device - left as it is ($($cur -join ', '))."
+    } else {
+        $dns = @(($officeNic.DNSServer | Where-Object AddressFamily -eq 2).ServerAddresses); if (-not $dns) { $dns = @($gw) }
+        try {
+            Set-NetIPInterface -InterfaceIndex $idx -Dhcp Disabled
+            Get-NetIPAddress -InterfaceIndex $idx -AddressFamily IPv4 -ErrorAction SilentlyContinue | Remove-NetIPAddress -Confirm:$false
+            Get-NetRoute -InterfaceIndex $idx -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue | Remove-NetRoute -Confirm:$false
+            New-NetIPAddress -InterfaceIndex $idx -IPAddress $ip -PrefixLength 24 -DefaultGateway $gw | Out-Null
+            Set-DnsClientServerAddress -InterfaceIndex $idx -ServerAddresses $dns
+            Start-Sleep 15; $ok = Test-OfficeNet
+        } catch { $ok = $false; Write-Warning "IP: $_" }
+        if ($ok) { Save-Change "IP fixed: $ip (was $($cur -join ', '), DHCP $dhcp)" }
+        else {
+            Get-NetIPAddress -InterfaceIndex $idx -AddressFamily IPv4 -ErrorAction SilentlyContinue | Remove-NetIPAddress -Confirm:$false
+            Get-NetRoute -InterfaceIndex $idx -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue | Remove-NetRoute -Confirm:$false
+            Set-NetIPInterface -InterfaceIndex $idx -Dhcp Enabled; Set-DnsClientServerAddress -InterfaceIndex $idx -ResetServerAddresses
+            ipconfig /renew | Out-Null
+            Write-Warning "IP: $ip did not work - back to automatic."
+        }
+    }
+}
+# Someone already logged on (the boot run can end after the logon): start their set-up scan app in their session now.
+if ($scanPc -and (Test-Path $ssuExe)) {
+    Get-CimInstance Win32_Process -Filter "Name='explorer.exe'" -ErrorAction SilentlyContinue | Sort-Object SessionId -Unique | ForEach-Object {
+        $sess = $_.SessionId; $o = Invoke-CimMethod -InputObject $_ -MethodName GetOwner
+        if (-not $o.User -or (Get-Process FBKRSSU -ErrorAction SilentlyContinue | Where-Object SessionId -eq $sess)) { return }
+        $acct = "$($o.Domain)\$($o.User)"
+        $usid = (New-Object Security.Principal.NTAccount $acct).Translate([Security.Principal.SecurityIdentifier]).Value
+        if (-not (Get-ItemProperty "Registry::HKEY_USERS\$usid\SOFTWARE\FBKR\FBKRSSU" -Name HomePath -ErrorAction SilentlyContinue)) { return }
+        Register-ScheduledTask -TaskName RemoveBloatScanStart -Action (New-ScheduledTaskAction -Execute $ssuExe) -User $acct -RunLevel Limited -Force | Out-Null
+        Start-ScheduledTask RemoveBloatScanStart; Start-Sleep 3; Unregister-ScheduledTask RemoveBloatScanStart -Confirm:$false
+        Save-Change "Scan app started for $acct"
+    }
+}
 
 # --- Speed (decided 2026-11-19). Services that only slow the boot / sit in memory:
 #   gupdate, gupdatem = the OLD Google updater (Chrome updates itself with the new GoogleUpdater); timed out at every boot on
@@ -1072,8 +1133,8 @@ Stop-Transcript | Out-Null
 # SIG # Begin signature block
 # MIIFZwYJKoZIhvcNAQcCoIIFWDCCBVQCAQExCzAJBgUrDgMCGgUAMGkGCisGAQQB
 # gjcCAQSgWzBZMDQGCisGAQQBgjcCAR4wJgIDAQAABBAfzDtgWUsITrck0sYpfvNR
-# AgEAAgEAAgEAAgEAAgEAMCEwCQYFKw4DAhoFAAQUGUy6ua6mA2YTc57t/0e57fat
-# 3aSgggMEMIIDADCCAeigAwIBAgIQbJgRWdpsZZhGIWivjED1ojANBgkqhkiG9w0B
+# AgEAAgEAAgEAAgEAAgEAMCEwCQYFKw4DAhoFAAQUyBJz3FJmzZUH75FluAfKJdxd
+# hZGgggMEMIIDADCCAeigAwIBAgIQbJgRWdpsZZhGIWivjED1ojANBgkqhkiG9w0B
 # AQsFADAYMRYwFAYDVQQDDA1KQyBwY19jbGVhbnVwMB4XDTI2MTExODAyMTEzOVoX
 # DTQ2MTExODAyMjEzOVowGDEWMBQGA1UEAwwNSkMgcGNfY2xlYW51cDCCASIwDQYJ
 # KoZIhvcNAQEBBQADggEPADCCAQoCggEBANdF7OMIUMnW2D5RUDZQ4yq+XfJ+JYAx
@@ -1092,11 +1153,11 @@ Stop-Transcript | Out-Null
 # 09BEDZn0MYk+BzGCAc0wggHJAgEBMCwwGDEWMBQGA1UEAwwNSkMgcGNfY2xlYW51
 # cAIQbJgRWdpsZZhGIWivjED1ojAJBgUrDgMCGgUAoHgwGAYKKwYBBAGCNwIBDDEK
 # MAigAoAAoQKAADAZBgkqhkiG9w0BCQMxDAYKKwYBBAGCNwIBBDAcBgorBgEEAYI3
-# AgELMQ4wDAYKKwYBBAGCNwIBFTAjBgkqhkiG9w0BCQQxFgQU3U/4BdLpYfL//Jla
-# rDUn1khAh7wwDQYJKoZIhvcNAQEBBQAEggEAKe1UV5Unjm80gVeGFiVyKkJb+iSM
-# 3Eh0dNdrijCgJ/yqyZ0QXjtI6PiUOpi7q2KwpKKtY8uPH2pQyhdkXfADImiNGWK/
-# 9Wi1Tco/hq2Wu7RAAAcG24z32aSn3g85mw45Do3CKQSCru4mCEPOOoUpRDJVupzv
-# a16MTMeUg85Hur4dHpYzDU/h5+UaHMb0IG8ZIEoWZWc/p25eeu8qgJor9U7yVqlk
-# p7Fczflk22HVqqV0USGjN6SKbe5TdSeC23Tp7Lm9I7Y4DYeruQL4rWyvE3+7O9KX
-# 24aSHwVzMZ44D7WjMAoYThJvKIgm+NJsg0qj7LZNIr5e9E2XMZxcKiQJWw==
+# AgELMQ4wDAYKKwYBBAGCNwIBFTAjBgkqhkiG9w0BCQQxFgQU7e0aY7U7sm9jTQVI
+# WQqBjYIM7XswDQYJKoZIhvcNAQEBBQAEggEAF7uscaFKQm1/a/RUeQj1tDiytJSA
+# byUNJR8W2uf8xI4y6o7D8PPwTBRqJnsYOv5PEtK1OdP1wl8aZXeVchcb/dsvYO+B
+# BDDkBhX/sy7DRo0y5hhwcvseVg75JocQEV+wUa0HgygGIjrAmHfXTY2vrqYLzF6R
+# clNnndQnZXq/CbglkSUnQcFGCAHHhfHTML7GEdM34RGxJKCmeFP6NRo4imKhL78d
+# ByUmeKT+zhvwAzO6HT4luGuCafWKsfA73zhfuFWoFAGA1ueXZLjHufRBjl+ySUEY
+# TZ37XzNLezGCY6IMKzF+UlzXrP+7VpKq8jrnLIaMmGLNviWVnwARupp/tA==
 # SIG # End signature block
