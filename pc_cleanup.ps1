@@ -119,7 +119,7 @@ function Test-FirstTime([string]$root, [string]$name) {
 # History: update.txt next to log.txt. The version before the last update: pc_cleanup.old.ps1.
 # Raise $version for every release: PCs only take a higher number (so no downgrade either). Keep that line bare:
 # the logon task at the end copies it to the NAS as this PC's status.
-$version = 2026112402
+$version = 2026112403
 $updateUrl = 'https://raw.githubusercontent.com/unofo/jc_pc_management/main/pc_cleanup.ps1'
 $signer = 'CDB8786DBAB645148EA2A8B82EFBE9CE854C06FA'
 $self = "$dir\pc_cleanup.ps1"
@@ -542,6 +542,14 @@ foreach ($p in Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVers
         Set-ItemProperty $ssuKey -Name HomePath -Value $scanDir; "Scan app of ${prof}: save folder $ssuHome -> $scanDir"
         if ($ssuHome -ne $oldScan) { $oldDirs += $ssuHome }
     }
+    # Its "auto start" box writes no Run entry (the app runs without admin rights; seen on jc-07): add it for this person.
+    $runKey = "Registry::HKU\$hive\Software\Microsoft\Windows\CurrentVersion\Run"
+    if ((Get-ItemProperty $ssuKey -Name LaunchOnStartup -ErrorAction SilentlyContinue).LaunchOnStartup -eq 1 -and
+        -not (Get-ItemProperty $runKey -Name FBKRSSU -ErrorAction SilentlyContinue)) {
+        New-Item $runKey -Force -ErrorAction SilentlyContinue | Out-Null
+        New-ItemProperty $runKey -Name FBKRSSU -PropertyType String -Value "`"$env:ProgramFiles\FUJIFILM Business Innovation Korea\FBKRSSU\FBKRSSU.exe`"" -Force | Out-Null
+        "Scan app of ${prof}: starts at logon (Run entry added)"
+    }
     foreach ($d in $oldDirs | Select-Object -Unique) {
         if (Test-Path -LiteralPath $d -PathType Container) { if (Move-ScanFolder $d) { "Scan folder $d moved into $scanDir and removed" } }
     }
@@ -707,6 +715,11 @@ if (-not (Test-Path $scanLnk)) {
     Save-Change "Desktop shortcut made: scan -> $scanDir"
 }
 if ((Test-Path $oldScan) -and (Move-ScanFolder $oldScan)) { Save-Change "Folder removed: $oldScan (its files, if any, moved to $scanDir)" }
+# An allow rule for the app up front (office LAN only): Windows then asks nothing on the person's screen when it first runs.
+if ((Test-Path $ssuExe) -and -not (Get-NetFirewallRule -DisplayName 'FBKRSSU scan (office LAN)' -ErrorAction SilentlyContinue)) {
+    New-NetFirewallRule -DisplayName 'FBKRSSU scan (office LAN)' -Direction Inbound -Program $ssuExe -Action Allow -Profile Any -RemoteAddress LocalSubnet | Out-Null
+    Save-Change 'Firewall: scan app allowed from the office network (no question on screen)'
+}
 Get-NetFirewallApplicationFilter -ErrorAction SilentlyContinue | Where-Object Program -like '*\fbkrssu.exe' | Get-NetFirewallRule |
     Where-Object { $_.Direction -eq 'Inbound' -and $_.Action -eq 'Block' } | ForEach-Object {
         Set-NetFirewallRule -Name $_.Name -Profile Any -Action Allow -RemoteAddress LocalSubnet
@@ -1059,8 +1072,8 @@ Stop-Transcript | Out-Null
 # SIG # Begin signature block
 # MIIFZwYJKoZIhvcNAQcCoIIFWDCCBVQCAQExCzAJBgUrDgMCGgUAMGkGCisGAQQB
 # gjcCAQSgWzBZMDQGCisGAQQBgjcCAR4wJgIDAQAABBAfzDtgWUsITrck0sYpfvNR
-# AgEAAgEAAgEAAgEAAgEAMCEwCQYFKw4DAhoFAAQUYtN07m32+DDCVcS0nLh56UQz
-# mm+gggMEMIIDADCCAeigAwIBAgIQbJgRWdpsZZhGIWivjED1ojANBgkqhkiG9w0B
+# AgEAAgEAAgEAAgEAAgEAMCEwCQYFKw4DAhoFAAQUGUy6ua6mA2YTc57t/0e57fat
+# 3aSgggMEMIIDADCCAeigAwIBAgIQbJgRWdpsZZhGIWivjED1ojANBgkqhkiG9w0B
 # AQsFADAYMRYwFAYDVQQDDA1KQyBwY19jbGVhbnVwMB4XDTI2MTExODAyMTEzOVoX
 # DTQ2MTExODAyMjEzOVowGDEWMBQGA1UEAwwNSkMgcGNfY2xlYW51cDCCASIwDQYJ
 # KoZIhvcNAQEBBQADggEPADCCAQoCggEBANdF7OMIUMnW2D5RUDZQ4yq+XfJ+JYAx
@@ -1079,11 +1092,11 @@ Stop-Transcript | Out-Null
 # 09BEDZn0MYk+BzGCAc0wggHJAgEBMCwwGDEWMBQGA1UEAwwNSkMgcGNfY2xlYW51
 # cAIQbJgRWdpsZZhGIWivjED1ojAJBgUrDgMCGgUAoHgwGAYKKwYBBAGCNwIBDDEK
 # MAigAoAAoQKAADAZBgkqhkiG9w0BCQMxDAYKKwYBBAGCNwIBBDAcBgorBgEEAYI3
-# AgELMQ4wDAYKKwYBBAGCNwIBFTAjBgkqhkiG9w0BCQQxFgQUCmBGVdbMS8WMkNOb
-# 7cSQbh2LooAwDQYJKoZIhvcNAQEBBQAEggEAd6dd5b0HG1XCFnid24Fz2mMtDxC4
-# tVpFE+Oanhv145RRds+hljF83aKJH4yF4roK1FNCTWcnZbYdKn1VwttBvc6UiHT+
-# 34hQQFuMS4Vb+9VCyt7sZsztltIi2ZDYDSEasmyvt8ttw4vfGyM+X2Rn5Z1QTNbp
-# AaAgMkd0Aa1b0x0/ytQLxFoDuPYHZMGZ0G1uED3UhCMHbjuVco8pRvYLdU65F8oL
-# BbRy0ZpIGa3UDvDixBSzs29i8ISF9Rgppg6clkzq3oVykSK9hIrPhD7uUjqTvrUu
-# sJHQbAYv0zjFrX+2RXhMG1HCiVBANPuvbv08b7XnTiZRRDmruaX+Wwbcsw==
+# AgELMQ4wDAYKKwYBBAGCNwIBFTAjBgkqhkiG9w0BCQQxFgQU3U/4BdLpYfL//Jla
+# rDUn1khAh7wwDQYJKoZIhvcNAQEBBQAEggEAKe1UV5Unjm80gVeGFiVyKkJb+iSM
+# 3Eh0dNdrijCgJ/yqyZ0QXjtI6PiUOpi7q2KwpKKtY8uPH2pQyhdkXfADImiNGWK/
+# 9Wi1Tco/hq2Wu7RAAAcG24z32aSn3g85mw45Do3CKQSCru4mCEPOOoUpRDJVupzv
+# a16MTMeUg85Hur4dHpYzDU/h5+UaHMb0IG8ZIEoWZWc/p25eeu8qgJor9U7yVqlk
+# p7Fczflk22HVqqV0USGjN6SKbe5TdSeC23Tp7Lm9I7Y4DYeruQL4rWyvE3+7O9KX
+# 24aSHwVzMZ44D7WjMAoYThJvKIgm+NJsg0qj7LZNIr5e9E2XMZxcKiQJWw==
 # SIG # End signature block
