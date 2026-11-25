@@ -119,8 +119,8 @@ function Test-FirstTime([string]$root, [string]$name) {
 # History: update.txt next to log.txt. The version before the last update: pc_cleanup.old.ps1.
 # Raise $version for every release: PCs only take a higher number (so no downgrade either). Keep that line bare:
 # the logon task at the end copies it to the NAS as this PC's status.
-$version = 2026112404
-$updateUrl = 'https://raw.githubusercontent.com/unofo/jc_pc_management/main/pc_cleanup.ps1'
+$version = 2026112501
+$updateUrl = 'https://raw.githubusercontent.com/unofo/jc_pc_management_dist/main/pc_cleanup.ps1'
 $signer = 'CDB8786DBAB645148EA2A8B82EFBE9CE854C06FA'
 $self = "$dir\pc_cleanup.ps1"
 $isSystem = [Security.Principal.WindowsIdentity]::GetCurrent().IsSystem
@@ -1133,8 +1133,8 @@ Stop-Transcript | Out-Null
 # SIG # Begin signature block
 # MIIFZwYJKoZIhvcNAQcCoIIFWDCCBVQCAQExCzAJBgUrDgMCGgUAMGkGCisGAQQB
 # gjcCAQSgWzBZMDQGCisGAQQBgjcCAR4wJgIDAQAABBAfzDtgWUsITrck0sYpfvNR
-# AgEAAgEAAgEAAgEAAgEAMCEwCQYFKw4DAhoFAAQUyBJz3FJmzZUH75FluAfKJdxd
-# hZGgggMEMIIDADCCAeigAwIBAgIQbJgRWdpsZZhGIWivjED1ojANBgkqhkiG9w0B
+# AgEAAgEAAgEAAgEAAgEAMCEwCQYFKw4DAhoFAAQUgoZ0Fo0OrpqE8LIkRvg0b+XN
+# ns2gggMEMIIDADCCAeigAwIBAgIQbJgRWdpsZZhGIWivjED1ojANBgkqhkiG9w0B
 # AQsFADAYMRYwFAYDVQQDDA1KQyBwY19jbGVhbnVwMB4XDTI2MTExODAyMTEzOVoX
 # DTQ2MTExODAyMjEzOVowGDEWMBQGA1UEAwwNSkMgcGNfY2xlYW51cDCCASIwDQYJ
 # KoZIhvcNAQEBBQADggEPADCCAQoCggEBANdF7OMIUMnW2D5RUDZQ4yq+XfJ+JYAx
@@ -1153,11 +1153,11 @@ Stop-Transcript | Out-Null
 # 09BEDZn0MYk+BzGCAc0wggHJAgEBMCwwGDEWMBQGA1UEAwwNSkMgcGNfY2xlYW51
 # cAIQbJgRWdpsZZhGIWivjED1ojAJBgUrDgMCGgUAoHgwGAYKKwYBBAGCNwIBDDEK
 # MAigAoAAoQKAADAZBgkqhkiG9w0BCQMxDAYKKwYBBAGCNwIBBDAcBgorBgEEAYI3
-# AgELMQ4wDAYKKwYBBAGCNwIBFTAjBgkqhkiG9w0BCQQxFgQU7e0aY7U7sm9jTQVI
-# WQqBjYIM7XswDQYJKoZIhvcNAQEBBQAEggEAF7uscaFKQm1/a/RUeQj1tDiytJSA
-# byUNJR8W2uf8xI4y6o7D8PPwTBRqJnsYOv5PEtK1OdP1wl8aZXeVchcb/dsvYO+B
-# BDDkBhX/sy7DRo0y5hhwcvseVg75JocQEV+wUa0HgygGIjrAmHfXTY2vrqYLzF6R
-# clNnndQnZXq/CbglkSUnQcFGCAHHhfHTML7GEdM34RGxJKCmeFP6NRo4imKhL78d
-# ByUmeKT+zhvwAzO6HT4luGuCafWKsfA73zhfuFWoFAGA1ueXZLjHufRBjl+ySUEY
-# TZ37XzNLezGCY6IMKzF+UlzXrP+7VpKq8jrnLIaMmGLNviWVnwARupp/tA==
+# AgELMQ4wDAYKKwYBBAGCNwIBFTAjBgkqhkiG9w0BCQQxFgQUvF1awgBNjoPwjfvg
+# ET0BqigvbfswDQYJKoZIhvcNAQEBBQAEggEA1PrKaSiGG5tNeFN++yyuw2vS0rX3
+# iEx1YnF9oeekvSdgDaK4ArKhdBacbI+sKrjtno6O02wQKaVYEPbeWci5zYeAnEgb
+# Zk6auPuULC2IvoAO8fNi+wcTxYqA2sOtLAhyLMpw8ttI9Cc0E8pW6D8T/78Hh+M/
+# M3yFwi/gp3G6TnqBih9+l3gJFek9XLXGZXrx03boMwhnphaKq7j7b2XXQuvhQKtA
+# hLFQe2gteE1pnWuXNSTKFLk1hhaq8mWgu4cXazZil915Qbmxq0GgR5AN1i2/tQte
+# wlLtD4ahlzAr8VgBJseo/dZNEbVOngr9pC6Jw5SyOw2GlMb88/j3WXegcg==
 # SIG # End signature block
